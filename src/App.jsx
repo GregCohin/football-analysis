@@ -7,6 +7,8 @@ const EVENT_CATEGORIES = [
     id: "offensif",
     label: "Offensif",
     events: [
+      { key: "controle_ok", label: "Contrôle réussi", hotkey: "H", positive: true },
+      { key: "controle_ko", label: "Contrôle manqué", hotkey: "L", positive: false },
       { key: "passe_ok", label: "Passe réussie", hotkey: "A", positive: true },
       { key: "passe_ko", label: "Passe manquée", hotkey: "Z", positive: false },
       { key: "centre_ok", label: "Centre réussi", hotkey: "C", positive: true },
@@ -120,13 +122,12 @@ export default function App() {
   const [lastTagFlash, setLastTagFlash] = useState(null);
   const [videoError, setVideoError] = useState(null);
   const [videoLoading, setVideoLoading] = useState(false);
-  const [activePlayer, setActivePlayer] = useState("");
+  const [pendingPlayerTag, setPendingPlayerTag] = useState(null);
 
   const videoRef = useRef(null);
   const currentMatchRef = useRef(null);
   currentMatchRef.current = currentMatch;
-  const digitBufferRef = useRef("");
-  const digitTimeoutRef = useRef(null);
+  const pendingTimeoutRef = useRef(null);
 
   useEffect(() => {
     setMatches(readIndex());
@@ -172,7 +173,6 @@ export default function App() {
     setCurrentTime(0);
     setActiveTeam("us");
     setActiveTab("journal");
-    setActivePlayer("");
     setScreen("tagging");
     setShowNewForm(false);
     setNewMatchForm({ name: "", opponent: "", date: todayIso() });
@@ -189,7 +189,6 @@ export default function App() {
       setVideoDuration(0);
       setCurrentTime(0);
       setActiveTab("journal");
-      setActivePlayer("");
       setScreen("tagging");
       setSaveStatus("saved");
     } catch (e) {
@@ -234,10 +233,27 @@ export default function App() {
   function addTag(eventKey) {
     if (!currentMatchRef.current || !videoRef.current) return;
     const t = videoRef.current.currentTime;
-    const tag = { id: newId(), time: t, eventKey, team: activeTeam, player: activePlayer };
+    const tag = { id: newId(), time: t, eventKey, team: activeTeam, player: "" };
     updateMatch((m) => ({ ...m, tags: [...m.tags, tag].sort((a, b) => a.time - b.time) }));
     setLastTagFlash(tag.id);
     setTimeout(() => setLastTagFlash((cur) => (cur === tag.id ? null : cur)), 500);
+    setPendingPlayerTag({ tagId: tag.id, team: activeTeam });
+    clearTimeout(pendingTimeoutRef.current);
+    pendingTimeoutRef.current = setTimeout(() => {
+      setPendingPlayerTag((cur) => (cur && cur.tagId === tag.id ? null : cur));
+    }, 5000);
+  }
+
+  function assignPendingPlayer(num) {
+    if (!pendingPlayerTag) return;
+    setTagPlayer(pendingPlayerTag.tagId, String(num));
+    clearTimeout(pendingTimeoutRef.current);
+    setPendingPlayerTag(null);
+  }
+
+  function dismissPendingPlayer() {
+    clearTimeout(pendingTimeoutRef.current);
+    setPendingPlayerTag(null);
   }
 
   function setPossession(team) {
@@ -282,14 +298,6 @@ export default function App() {
       if (e.key === "Tab") { e.preventDefault(); setActiveTeam((p) => (p === "us" ? "opp" : "us")); return; }
       if (e.key === "ArrowLeft") { e.preventDefault(); nudge(-5); return; }
       if (e.key === "ArrowRight") { e.preventDefault(); nudge(5); return; }
-      if (/^[0-9]$/.test(e.key)) {
-        e.preventDefault();
-        digitBufferRef.current = digitBufferRef.current.length >= 2 ? e.key : digitBufferRef.current + e.key;
-        setActivePlayer(digitBufferRef.current);
-        clearTimeout(digitTimeoutRef.current);
-        digitTimeoutRef.current = setTimeout(() => { digitBufferRef.current = ""; }, 1200);
-        return;
-      }
       const upper = e.key.toUpperCase();
       const found = ALL_EVENTS.find((ev) => ev.hotkey === upper);
       if (found) addTag(found.key);
@@ -312,6 +320,7 @@ export default function App() {
     };
     return {
       byTeam,
+      controlePct: { us: pct(byTeam.us.controle_ok, byTeam.us.controle_ko), opp: pct(byTeam.opp.controle_ok, byTeam.opp.controle_ko) },
       passPct: { us: pct(byTeam.us.passe_ok, byTeam.us.passe_ko), opp: pct(byTeam.opp.passe_ok, byTeam.opp.passe_ko) },
       shotPct: { us: pct(byTeam.us.tir_cadre, byTeam.us.tir_hc), opp: pct(byTeam.opp.tir_cadre, byTeam.opp.tir_hc) },
       tacklePct: { us: pct(byTeam.us.tacle_ok, byTeam.us.tacle_ko), opp: pct(byTeam.opp.tacle_ok, byTeam.opp.tacle_ko) },
@@ -381,8 +390,9 @@ export default function App() {
           setVideoError={setVideoError}
           videoLoading={videoLoading}
           setVideoLoading={setVideoLoading}
-          activePlayer={activePlayer}
-          setActivePlayer={setActivePlayer}
+          pendingPlayerTag={pendingPlayerTag}
+          assignPendingPlayer={assignPendingPlayer}
+          dismissPendingPlayer={dismissPendingPlayer}
           setPossession={setPossession}
         />
       )}
@@ -470,7 +480,7 @@ function TaggingScreen(props) {
     saveStatus, activeTab, setActiveTab, handleFile, togglePlay, seekTo, nudge,
     addTag, removeTag, setTagPlayer, exportMatch, goHome, stats, chartData, lastTagFlash,
     videoError, setVideoError, videoLoading, setVideoLoading,
-    activePlayer, setActivePlayer, setPossession,
+    pendingPlayerTag, assignPendingPlayer, dismissPendingPlayer, setPossession,
   } = props;
 
   const fileInputRef = useRef(null);
@@ -486,9 +496,10 @@ function TaggingScreen(props) {
   const playerStats = Object.values(
     match.tags.reduce((acc, t) => {
       if (!t.player) return acc;
-      if (!acc[t.player]) acc[t.player] = { player: t.player, total: 0, positive: 0 };
-      acc[t.player].total++;
-      if (EVENT_MAP[t.eventKey].positive) acc[t.player].positive++;
+      const key = `${t.team}_${t.player}`;
+      if (!acc[key]) acc[key] = { player: t.player, team: t.team, total: 0, positive: 0 };
+      acc[key].total++;
+      if (EVENT_MAP[t.eventKey].positive) acc[key].positive++;
       return acc;
     }, {})
   ).sort((a, b) => b.total - a.total);
@@ -625,6 +636,7 @@ function TaggingScreen(props) {
                 </div>
               )}
               <div className="ratio-grid">
+                <RatioCard label="Précision de contrôle" us={stats.controlePct.us} opp={stats.controlePct.opp} />
                 <RatioCard label="Précision de passe" us={stats.passPct.us} opp={stats.passPct.opp} />
                 <RatioCard label="Tirs cadrés" us={stats.shotPct.us} opp={stats.shotPct.opp} />
                 <RatioCard label="Tacles réussis" us={stats.tacklePct.us} opp={stats.tacklePct.opp} />
@@ -646,7 +658,8 @@ function TaggingScreen(props) {
                 <div className="player-stats">
                   <div className="ratio-label">Par joueur</div>
                   {playerStats.map((p) => (
-                    <div className="player-stat-row" key={p.player}>
+                    <div className="player-stat-row" key={`${p.team}_${p.player}`}>
+                      <span className={`team-dot ${p.team}`} />
                       <span className="player-stat-num">n°{p.player}</span>
                       <span className="player-stat-count">{p.total} action{p.total > 1 ? "s" : ""}</span>
                       <span className="player-stat-pos">{p.positive} positive{p.positive > 1 ? "s" : ""}</span>
@@ -659,25 +672,23 @@ function TaggingScreen(props) {
         </div>
 
         <div className="side-col">
+          {pendingPlayerTag && (
+            <div className={`player-picker ${pendingPlayerTag.team}`}>
+              <div className="player-picker-label">
+                Quel joueur ? <span className="player-picker-team">{pendingPlayerTag.team === "us" ? "Nous" : "Adversaire"}</span>
+              </div>
+              <div className="player-picker-grid">
+                {Array.from({ length: 20 }, (_, i) => i + 1).map((n) => (
+                  <button key={n} className="player-picker-btn" onClick={() => assignPendingPlayer(n)}>{n}</button>
+                ))}
+              </div>
+              <button className="player-picker-skip" onClick={dismissPendingPlayer}>Passer</button>
+            </div>
+          )}
+
           <div className="team-toggle">
             <button className={`team-btn us ${activeTeam === "us" ? "active" : ""}`} onClick={() => setActiveTeam("us")}>NOUS</button>
             <button className={`team-btn opp ${activeTeam === "opp" ? "active" : ""}`} onClick={() => setActiveTeam("opp")}>ADVERSAIRE</button>
-          </div>
-
-          <div className="active-player-row">
-            <span className="active-player-label">Joueur actif</span>
-            <input
-              className="active-player-input"
-              value={activePlayer}
-              onChange={(e) => setActivePlayer(e.target.value.replace(/[^0-9]/g, "").slice(0, 2))}
-              placeholder="—"
-              inputMode="numeric"
-            />
-            {activePlayer && (
-              <button className="icon-btn" onClick={() => setActivePlayer("")} aria-label="Effacer le joueur actif">
-                <X size={12} />
-              </button>
-            )}
           </div>
 
           <div className="possession-block">
@@ -696,7 +707,7 @@ function TaggingScreen(props) {
             )}
           </div>
 
-          <div className="hint">Tab : équipe · Espace : lecture · chiffres : joueur actif</div>
+          <div className="hint">Tab : équipe · Espace : lecture/pause</div>
 
           {EVENT_CATEGORIES.map((cat) => (
             <div className="event-category" key={cat.id}>
@@ -904,9 +915,18 @@ const CSS = `
   .team-btn.opp.active { background: var(--crimson); color: #2A0F0D; border-color: var(--crimson); }
   .hint { font-size: 11px; color: var(--ink-muted); text-align: center; }
 
-  .active-player-row { display: flex; align-items: center; gap: 8px; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
-  .active-player-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--ink-muted); font-weight: 700; flex: 1; }
-  .active-player-input { width: 44px; background: var(--bg); border: 1px solid var(--line); color: var(--gold); font-weight: 800; font-size: 15px; text-align: center; border-radius: 6px; padding: 4px 2px; }
+  .player-picker { background: var(--surface); border: 1px solid var(--gold); border-radius: 8px; padding: 10px; animation: pop-in 0.15s ease; }
+  .player-picker.opp { border-color: var(--crimson); }
+  .player-picker-label { font-size: 12px; font-weight: 700; color: var(--ink); margin-bottom: 8px; }
+  .player-picker-team { color: var(--gold); }
+  .player-picker.opp .player-picker-team { color: var(--crimson); }
+  .player-picker-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 5px; }
+  .player-picker-btn { background: var(--bg); border: 1px solid var(--line); color: var(--ink); border-radius: 6px; padding: 8px 0; font-size: 12px; font-weight: 700; }
+  .player-picker-btn:hover { border-color: var(--gold); }
+  .player-picker.opp .player-picker-btn:hover { border-color: var(--crimson); }
+  .player-picker-skip { display: block; width: 100%; text-align: center; background: transparent; border: none; color: var(--ink-muted); font-size: 11px; margin-top: 8px; padding: 4px; }
+  .player-picker-skip:hover { color: var(--ink); }
+  @keyframes pop-in { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
 
   .possession-block { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 10px; }
   .possession-block .event-category-label { margin: 0 0 8px; }
