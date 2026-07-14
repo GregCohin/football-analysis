@@ -120,10 +120,13 @@ export default function App() {
   const [lastTagFlash, setLastTagFlash] = useState(null);
   const [videoError, setVideoError] = useState(null);
   const [videoLoading, setVideoLoading] = useState(false);
+  const [activePlayer, setActivePlayer] = useState("");
 
   const videoRef = useRef(null);
   const currentMatchRef = useRef(null);
   currentMatchRef.current = currentMatch;
+  const digitBufferRef = useRef("");
+  const digitTimeoutRef = useRef(null);
 
   useEffect(() => {
     setMatches(readIndex());
@@ -159,6 +162,7 @@ export default function App() {
       opponent: newMatchForm.opponent.trim() || "Adversaire",
       date: newMatchForm.date || todayIso(),
       tags: [],
+      possession: [],
     };
     writeMatch(match);
     persistIndexUpdate(match);
@@ -168,6 +172,7 @@ export default function App() {
     setCurrentTime(0);
     setActiveTeam("us");
     setActiveTab("journal");
+    setActivePlayer("");
     setScreen("tagging");
     setShowNewForm(false);
     setNewMatchForm({ name: "", opponent: "", date: todayIso() });
@@ -177,12 +182,14 @@ export default function App() {
   function openMatch(summary) {
     try {
       const raw = localStorage.getItem(matchStorageKey(summary.id));
-      const match = raw ? JSON.parse(raw) : { ...summary, tags: [] };
+      const parsed = raw ? JSON.parse(raw) : { ...summary, tags: [] };
+      const match = { ...parsed, tags: parsed.tags || [], possession: parsed.possession || [] };
       setCurrentMatch(match);
       setVideoUrl(null);
       setVideoDuration(0);
       setCurrentTime(0);
       setActiveTab("journal");
+      setActivePlayer("");
       setScreen("tagging");
       setSaveStatus("saved");
     } catch (e) {
@@ -227,10 +234,22 @@ export default function App() {
   function addTag(eventKey) {
     if (!currentMatchRef.current || !videoRef.current) return;
     const t = videoRef.current.currentTime;
-    const tag = { id: newId(), time: t, eventKey, team: activeTeam, player: "" };
+    const tag = { id: newId(), time: t, eventKey, team: activeTeam, player: activePlayer };
     updateMatch((m) => ({ ...m, tags: [...m.tags, tag].sort((a, b) => a.time - b.time) }));
     setLastTagFlash(tag.id);
     setTimeout(() => setLastTagFlash((cur) => (cur === tag.id ? null : cur)), 500);
+  }
+
+  function setPossession(team) {
+    if (!videoRef.current) return;
+    const t = videoRef.current.currentTime;
+    updateMatch((m) => {
+      const poss = m.possession || [];
+      const last = poss[poss.length - 1];
+      if (last && last.end == null && last.team === team) return m; // déjà actif, rien à faire
+      const closed = poss.map((p, i) => (i === poss.length - 1 && p.end == null ? { ...p, end: t } : p));
+      return { ...m, possession: [...closed, { team, start: t, end: null }] };
+    });
   }
 
   function removeTag(tagId) {
@@ -263,6 +282,14 @@ export default function App() {
       if (e.key === "Tab") { e.preventDefault(); setActiveTeam((p) => (p === "us" ? "opp" : "us")); return; }
       if (e.key === "ArrowLeft") { e.preventDefault(); nudge(-5); return; }
       if (e.key === "ArrowRight") { e.preventDefault(); nudge(5); return; }
+      if (/^[0-9]$/.test(e.key)) {
+        e.preventDefault();
+        digitBufferRef.current = digitBufferRef.current.length >= 2 ? e.key : digitBufferRef.current + e.key;
+        setActivePlayer(digitBufferRef.current);
+        clearTimeout(digitTimeoutRef.current);
+        digitTimeoutRef.current = setTimeout(() => { digitBufferRef.current = ""; }, 1200);
+        return;
+      }
       const upper = e.key.toUpperCase();
       const found = ALL_EVENTS.find((ev) => ev.hotkey === upper);
       if (found) addTag(found.key);
@@ -354,6 +381,9 @@ export default function App() {
           setVideoError={setVideoError}
           videoLoading={videoLoading}
           setVideoLoading={setVideoLoading}
+          activePlayer={activePlayer}
+          setActivePlayer={setActivePlayer}
+          setPossession={setPossession}
         />
       )}
     </div>
@@ -440,9 +470,28 @@ function TaggingScreen(props) {
     saveStatus, activeTab, setActiveTab, handleFile, togglePlay, seekTo, nudge,
     addTag, removeTag, setTagPlayer, exportMatch, goHome, stats, chartData, lastTagFlash,
     videoError, setVideoError, videoLoading, setVideoLoading,
+    activePlayer, setActivePlayer, setPossession,
   } = props;
 
   const fileInputRef = useRef(null);
+  const possessionTeam = match.possession && match.possession.length > 0 ? match.possession[match.possession.length - 1].team : null;
+  const possDurations = { us: 0, opp: 0, neutral: 0 };
+  (match.possession || []).forEach((p) => {
+    const end = p.end != null ? p.end : currentTime;
+    possDurations[p.team] += Math.max(0, end - p.start);
+  });
+  const possTotal = possDurations.us + possDurations.opp + possDurations.neutral;
+  const possPct = (v) => (possTotal > 0 ? Math.round((v / possTotal) * 100) : 0);
+
+  const playerStats = Object.values(
+    match.tags.reduce((acc, t) => {
+      if (!t.player) return acc;
+      if (!acc[t.player]) acc[t.player] = { player: t.player, total: 0, positive: 0 };
+      acc[t.player].total++;
+      if (EVENT_MAP[t.eventKey].positive) acc[t.player].positive++;
+      return acc;
+    }, {})
+  ).sort((a, b) => b.total - a.total);
 
   return (
     <div className="tagging">
@@ -525,7 +574,7 @@ function TaggingScreen(props) {
           )}
 
           {videoUrl && videoDuration > 0 && (
-            <TimelinePulse tags={match.tags} duration={videoDuration} currentTime={currentTime} onSeek={seekTo} />
+            <TimelinePulse tags={match.tags} possession={match.possession} duration={videoDuration} currentTime={currentTime} onSeek={seekTo} />
           )}
 
           <div className="tabs">
@@ -560,6 +609,21 @@ function TaggingScreen(props) {
 
           {activeTab === "stats" && stats && (
             <div className="stats-panel">
+              {possTotal > 0 && (
+                <div className="possession-summary">
+                  <div className="ratio-label">Possession</div>
+                  <div className="possession-bar">
+                    {possPct(possDurations.us) > 0 && <div className="possession-seg us" style={{ width: `${possPct(possDurations.us)}%` }} />}
+                    {possPct(possDurations.neutral) > 0 && <div className="possession-seg neutral" style={{ width: `${possPct(possDurations.neutral)}%` }} />}
+                    {possPct(possDurations.opp) > 0 && <div className="possession-seg opp" style={{ width: `${possPct(possDurations.opp)}%` }} />}
+                  </div>
+                  <div className="possession-legend">
+                    <span><i className="dot us" />Nous {possPct(possDurations.us)}%</span>
+                    <span><i className="dot neutral" />Neutre {possPct(possDurations.neutral)}%</span>
+                    <span><i className="dot opp" />Adversaire {possPct(possDurations.opp)}%</span>
+                  </div>
+                </div>
+              )}
               <div className="ratio-grid">
                 <RatioCard label="Précision de passe" us={stats.passPct.us} opp={stats.passPct.opp} />
                 <RatioCard label="Tirs cadrés" us={stats.shotPct.us} opp={stats.shotPct.opp} />
@@ -578,6 +642,18 @@ function TaggingScreen(props) {
                   </BarChart>
                 </ResponsiveContainer>
               </div>
+              {playerStats.length > 0 && (
+                <div className="player-stats">
+                  <div className="ratio-label">Par joueur</div>
+                  {playerStats.map((p) => (
+                    <div className="player-stat-row" key={p.player}>
+                      <span className="player-stat-num">n°{p.player}</span>
+                      <span className="player-stat-count">{p.total} action{p.total > 1 ? "s" : ""}</span>
+                      <span className="player-stat-pos">{p.positive} positive{p.positive > 1 ? "s" : ""}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -587,7 +663,40 @@ function TaggingScreen(props) {
             <button className={`team-btn us ${activeTeam === "us" ? "active" : ""}`} onClick={() => setActiveTeam("us")}>NOUS</button>
             <button className={`team-btn opp ${activeTeam === "opp" ? "active" : ""}`} onClick={() => setActiveTeam("opp")}>ADVERSAIRE</button>
           </div>
-          <div className="hint">Astuce : Tab pour changer d'équipe, Espace pour lecture/pause</div>
+
+          <div className="active-player-row">
+            <span className="active-player-label">Joueur actif</span>
+            <input
+              className="active-player-input"
+              value={activePlayer}
+              onChange={(e) => setActivePlayer(e.target.value.replace(/[^0-9]/g, "").slice(0, 2))}
+              placeholder="—"
+              inputMode="numeric"
+            />
+            {activePlayer && (
+              <button className="icon-btn" onClick={() => setActivePlayer("")} aria-label="Effacer le joueur actif">
+                <X size={12} />
+              </button>
+            )}
+          </div>
+
+          <div className="possession-block">
+            <div className="event-category-label">Possession</div>
+            <div className="possession-toggle">
+              <button className={`poss-btn us ${possessionTeam === "us" ? "active" : ""} ${!videoUrl ? "disabled" : ""}`} onClick={() => videoUrl && setPossession("us")} disabled={!videoUrl}>Nous</button>
+              <button className={`poss-btn neutral ${possessionTeam === "neutral" ? "active" : ""} ${!videoUrl ? "disabled" : ""}`} onClick={() => videoUrl && setPossession("neutral")} disabled={!videoUrl}>Neutre</button>
+              <button className={`poss-btn opp ${possessionTeam === "opp" ? "active" : ""} ${!videoUrl ? "disabled" : ""}`} onClick={() => videoUrl && setPossession("opp")} disabled={!videoUrl}>Adv.</button>
+            </div>
+            {possTotal > 0 && (
+              <div className="possession-readout">
+                <span className="us">{formatTime(possDurations.us)} · {possPct(possDurations.us)}%</span>
+                <span className="neutral">{formatTime(possDurations.neutral)} · {possPct(possDurations.neutral)}%</span>
+                <span className="opp">{formatTime(possDurations.opp)} · {possPct(possDurations.opp)}%</span>
+              </div>
+            )}
+          </div>
+
+          <div className="hint">Tab : équipe · Espace : lecture · chiffres : joueur actif</div>
 
           {EVENT_CATEGORIES.map((cat) => (
             <div className="event-category" key={cat.id}>
@@ -631,7 +740,7 @@ function RatioCard({ label, us, opp }) {
   );
 }
 
-function TimelinePulse({ tags, duration, currentTime, onSeek }) {
+function TimelinePulse({ tags, possession, duration, currentTime, onSeek }) {
   function handleClick(e) {
     const rect = e.currentTarget.getBoundingClientRect();
     const pct = (e.clientX - rect.left) / rect.width;
@@ -639,6 +748,12 @@ function TimelinePulse({ tags, duration, currentTime, onSeek }) {
   }
   return (
     <div className="pulse-track" onClick={handleClick}>
+      {(possession || []).map((p, i) => {
+        const end = p.end != null ? p.end : currentTime;
+        const left = (p.start / duration) * 100;
+        const width = Math.max(0, ((end - p.start) / duration) * 100);
+        return <div key={i} className={`pulse-band ${p.team}`} style={{ left: `${left}%`, width: `${width}%` }} />;
+      })}
       <div className="pulse-progress" style={{ width: `${(currentTime / duration) * 100}%` }} />
       {tags.map((t) => {
         const ev = EVENT_MAP[t.eventKey];
@@ -729,7 +844,11 @@ const CSS = `
   .time-code { font-variant-numeric: tabular-nums; font-size: 13px; color: var(--ink-muted); margin-left: auto; }
   .video-controls select { background: var(--surface); color: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; font-size: 12px; }
 
-  .pulse-track { position: relative; height: 34px; background: var(--surface); border: 1px solid var(--line); border-radius: 6px; margin-top: 12px; cursor: pointer; }
+  .pulse-track { position: relative; height: 34px; background: var(--surface); border: 1px solid var(--line); border-radius: 6px; margin-top: 12px; cursor: pointer; overflow: hidden; }
+  .pulse-band { position: absolute; top: 0; bottom: 0; opacity: 0.28; }
+  .pulse-band.us { background: var(--gold); }
+  .pulse-band.opp { background: var(--crimson); }
+  .pulse-band.neutral { background: var(--ink-muted); }
   .pulse-progress { position: absolute; top: 0; left: 0; bottom: 0; background: rgba(227,178,60,0.12); border-right: 1px solid var(--gold); }
   .pulse-tick { position: absolute; top: 6px; width: 3px; height: 22px; border-radius: 2px; transform: translateX(-50%); }
   .pulse-tick.us.pos { background: var(--gold); }
@@ -754,6 +873,21 @@ const CSS = `
   .player-input { width: 44px; background: var(--bg); border: 1px solid var(--line); color: var(--ink); border-radius: 4px; padding: 4px 6px; font-size: 12px; text-align: center; }
 
   .stats-panel { margin-top: 14px; }
+  .possession-summary { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; margin-bottom: 14px; }
+  .possession-bar { display: flex; height: 14px; border-radius: 4px; overflow: hidden; margin: 8px 0 10px; background: var(--bg); }
+  .possession-seg.us { background: var(--gold); }
+  .possession-seg.opp { background: var(--crimson); }
+  .possession-seg.neutral { background: var(--ink-muted); }
+  .possession-legend { display: flex; flex-wrap: wrap; gap: 12px; font-size: 11px; color: var(--ink-muted); }
+  .possession-legend .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 5px; }
+  .possession-legend .dot.us { background: var(--gold); }
+  .possession-legend .dot.opp { background: var(--crimson); }
+  .possession-legend .dot.neutral { background: var(--ink-muted); }
+  .player-stats { margin-top: 18px; }
+  .player-stat-row { display: flex; align-items: center; gap: 12px; background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 8px 12px; margin-bottom: 6px; font-size: 12px; }
+  .player-stat-num { font-weight: 800; color: var(--gold); width: 40px; }
+  .player-stat-count { flex: 1; color: var(--ink); }
+  .player-stat-pos { color: var(--ink-muted); }
   .ratio-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-bottom: 18px; }
   .ratio-card { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; }
   .ratio-label { font-size: 11px; color: var(--ink-muted); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 6px; }
@@ -769,6 +903,23 @@ const CSS = `
   .team-btn.us.active { background: var(--gold); color: var(--gold-ink); border-color: var(--gold); }
   .team-btn.opp.active { background: var(--crimson); color: #2A0F0D; border-color: var(--crimson); }
   .hint { font-size: 11px; color: var(--ink-muted); text-align: center; }
+
+  .active-player-row { display: flex; align-items: center; gap: 8px; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+  .active-player-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--ink-muted); font-weight: 700; flex: 1; }
+  .active-player-input { width: 44px; background: var(--bg); border: 1px solid var(--line); color: var(--gold); font-weight: 800; font-size: 15px; text-align: center; border-radius: 6px; padding: 4px 2px; }
+
+  .possession-block { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 10px; }
+  .possession-block .event-category-label { margin: 0 0 8px; }
+  .possession-toggle { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; }
+  .poss-btn { padding: 8px 4px; border-radius: 6px; font-weight: 700; font-size: 11px; letter-spacing: 0.02em; border: 1px solid var(--line); background: var(--bg); color: var(--ink-muted); }
+  .poss-btn.us.active { background: var(--gold); color: var(--gold-ink); border-color: var(--gold); }
+  .poss-btn.opp.active { background: var(--crimson); color: #2A0F0D; border-color: var(--crimson); }
+  .poss-btn.neutral.active { background: var(--ink-muted); color: var(--bg); border-color: var(--ink-muted); }
+  .poss-btn.disabled { opacity: 0.4; cursor: not-allowed; }
+  .possession-readout { display: flex; flex-direction: column; gap: 3px; margin-top: 8px; font-size: 11px; font-variant-numeric: tabular-nums; }
+  .possession-readout .us { color: var(--gold); }
+  .possession-readout .opp { color: var(--crimson); }
+  .possession-readout .neutral { color: var(--ink-muted); }
 
   .event-category-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-muted); font-weight: 700; margin: 10px 0 6px; }
   .event-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
