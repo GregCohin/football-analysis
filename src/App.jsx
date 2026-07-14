@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
-import { Play, Pause, ArrowLeft, X, Download, Video as VideoIcon } from "lucide-react";
+import { Play, Pause, ArrowLeft, X, Download, Video as VideoIcon, Film } from "lucide-react";
+import { generateCompilation } from "./videoCompiler";
 
 const EVENT_CATEGORIES = [
   {
@@ -116,15 +117,17 @@ export default function App() {
   const [playbackRate, setPlaybackRate] = useState(1);
   const [activeTeam, setActiveTeam] = useState("us");
   const [saveStatus, setSaveStatus] = useState("saved");
-  const [activeTab, setActiveTab] = useState("journal");
   const [showNewForm, setShowNewForm] = useState(false);
   const [newMatchForm, setNewMatchForm] = useState({ name: "", opponent: "", date: todayIso() });
   const [lastTagFlash, setLastTagFlash] = useState(null);
   const [videoError, setVideoError] = useState(null);
   const [videoLoading, setVideoLoading] = useState(false);
   const [pendingPlayerTag, setPendingPlayerTag] = useState(null);
+  const [compilationJob, setCompilationJob] = useState(null);
+  const [compilations, setCompilations] = useState([]);
 
   const videoRef = useRef(null);
+  const videoFileRef = useRef(null);
   const currentMatchRef = useRef(null);
   currentMatchRef.current = currentMatch;
   const pendingTimeoutRef = useRef(null);
@@ -172,11 +175,11 @@ export default function App() {
     setVideoDuration(0);
     setCurrentTime(0);
     setActiveTeam("us");
-    setActiveTab("journal");
     setScreen("tagging");
     setShowNewForm(false);
     setNewMatchForm({ name: "", opponent: "", date: todayIso() });
     setSaveStatus("saved");
+    setCompilations([]);
   }
 
   function openMatch(summary) {
@@ -188,9 +191,9 @@ export default function App() {
       setVideoUrl(null);
       setVideoDuration(0);
       setCurrentTime(0);
-      setActiveTab("journal");
       setScreen("tagging");
       setSaveStatus("saved");
+      setCompilations([]);
     } catch (e) {
       alert("Impossible de charger ce match (données corrompues).");
     }
@@ -208,6 +211,7 @@ export default function App() {
   function handleFile(e) {
     const file = e.target.files && e.target.files[0];
     if (!file) return;
+    videoFileRef.current = file;
     setVideoError(null);
     setVideoLoading(true);
     setVideoUrl(URL.createObjectURL(file));
@@ -287,6 +291,22 @@ export default function App() {
     a.click();
     a.remove();
     URL.revokeObjectURL(url);
+  }
+
+  async function runCompilation(label, clipCenters) {
+    if (!videoFileRef.current || compilationJob || clipCenters.length === 0) return;
+    setCompilationJob({ label, phase: "chargement du moteur vidéo", pct: 0 });
+    try {
+      const blob = await generateCompilation(videoFileRef.current, clipCenters, videoDuration, (p) => {
+        setCompilationJob({ label, phase: p.phase, pct: p.pct });
+      });
+      const url = URL.createObjectURL(blob);
+      setCompilations((prev) => [{ id: newId(), label, url, size: blob.size, count: clipCenters.length }, ...prev]);
+    } catch (e) {
+      alert("La génération a échoué : " + (e && e.message ? e.message : "erreur inconnue"));
+    } finally {
+      setCompilationJob(null);
+    }
   }
 
   useEffect(() => {
@@ -372,8 +392,6 @@ export default function App() {
           activeTeam={activeTeam}
           setActiveTeam={setActiveTeam}
           saveStatus={saveStatus}
-          activeTab={activeTab}
-          setActiveTab={setActiveTab}
           handleFile={handleFile}
           togglePlay={togglePlay}
           seekTo={seekTo}
@@ -394,6 +412,9 @@ export default function App() {
           assignPendingPlayer={assignPendingPlayer}
           dismissPendingPlayer={dismissPendingPlayer}
           setPossession={setPossession}
+          runCompilation={runCompilation}
+          compilationJob={compilationJob}
+          compilations={compilations}
         />
       )}
     </div>
@@ -477,10 +498,11 @@ function TaggingScreen(props) {
   const {
     match, videoUrl, videoRef, videoDuration, setVideoDuration, currentTime, setCurrentTime,
     isPlaying, setIsPlaying, playbackRate, setPlaybackRate, activeTeam, setActiveTeam,
-    saveStatus, activeTab, setActiveTab, handleFile, togglePlay, seekTo, nudge,
+    saveStatus, handleFile, togglePlay, seekTo, nudge,
     addTag, removeTag, setTagPlayer, exportMatch, goHome, stats, chartData, lastTagFlash,
     videoError, setVideoError, videoLoading, setVideoLoading,
     pendingPlayerTag, assignPendingPlayer, dismissPendingPlayer, setPossession,
+    runCompilation, compilationJob, compilations,
   } = props;
 
   const fileInputRef = useRef(null);
@@ -497,12 +519,23 @@ function TaggingScreen(props) {
     match.tags.reduce((acc, t) => {
       if (!t.player) return acc;
       const key = `${t.team}_${t.player}`;
-      if (!acc[key]) acc[key] = { player: t.player, team: t.team, total: 0, positive: 0 };
+      if (!acc[key]) acc[key] = { player: t.player, team: t.team, total: 0, positive: 0, times: [] };
       acc[key].total++;
+      acc[key].times.push(t.time);
       if (EVENT_MAP[t.eventKey].positive) acc[key].positive++;
       return acc;
     }, {})
   ).sort((a, b) => b.total - a.total);
+
+  const eventCompilationRows = [];
+  ALL_EVENTS.forEach((ev) => {
+    ["us", "opp"].forEach((team) => {
+      const times = match.tags.filter((t) => t.eventKey === ev.key && t.team === team).map((t) => t.time);
+      if (times.length > 0) {
+        eventCompilationRows.push({ key: `${ev.key}_${team}`, label: `${ev.label} — ${team === "us" ? "Nous" : "Adversaire"}`, times });
+      }
+    });
+  });
 
   return (
     <div className="tagging">
@@ -517,7 +550,7 @@ function TaggingScreen(props) {
       </div>
 
       <div className="tagging-grid">
-        <div className="main-col">
+        <div className="video-section">
           {!videoUrl && (
             <div className="video-placeholder">
               <VideoIcon size={32} />
@@ -587,13 +620,72 @@ function TaggingScreen(props) {
           {videoUrl && videoDuration > 0 && (
             <TimelinePulse tags={match.tags} possession={match.possession} duration={videoDuration} currentTime={currentTime} onSeek={seekTo} />
           )}
+        </div>
 
-          <div className="tabs">
-            <button className={`tab ${activeTab === "journal" ? "active" : ""}`} onClick={() => setActiveTab("journal")}>Journal ({match.tags.length})</button>
-            <button className={`tab ${activeTab === "stats" ? "active" : ""}`} onClick={() => setActiveTab("stats")}>Statistiques</button>
+        <div className="selectors-col">
+          {pendingPlayerTag && (
+            <div className={`player-picker ${pendingPlayerTag.team}`}>
+              <div className="player-picker-label">
+                Quel joueur ? <span className="player-picker-team">{pendingPlayerTag.team === "us" ? "Nous" : "Adversaire"}</span>
+              </div>
+              <div className="player-picker-grid">
+                {Array.from({ length: 20 }, (_, i) => i + 1).map((n) => (
+                  <button key={n} className="player-picker-btn" onClick={() => assignPendingPlayer(n)}>{n}</button>
+                ))}
+              </div>
+              <button className="player-picker-skip" onClick={dismissPendingPlayer}>Passer</button>
+            </div>
+          )}
+
+          <div className="selectors-header">
+            <div className="team-toggle">
+              <button className={`team-btn us ${activeTeam === "us" ? "active" : ""}`} onClick={() => setActiveTeam("us")}>NOUS</button>
+              <button className={`team-btn opp ${activeTeam === "opp" ? "active" : ""}`} onClick={() => setActiveTeam("opp")}>ADVERSAIRE</button>
+            </div>
+
+            <div className="possession-block">
+              <div className="event-category-label">Possession</div>
+              <div className="possession-toggle">
+                <button className={`poss-btn us ${possessionTeam === "us" ? "active" : ""} ${!videoUrl ? "disabled" : ""}`} onClick={() => videoUrl && setPossession("us")} disabled={!videoUrl}>Nous</button>
+                <button className={`poss-btn neutral ${possessionTeam === "neutral" ? "active" : ""} ${!videoUrl ? "disabled" : ""}`} onClick={() => videoUrl && setPossession("neutral")} disabled={!videoUrl}>Neutre</button>
+                <button className={`poss-btn opp ${possessionTeam === "opp" ? "active" : ""} ${!videoUrl ? "disabled" : ""}`} onClick={() => videoUrl && setPossession("opp")} disabled={!videoUrl}>Adv.</button>
+              </div>
+              {possTotal > 0 && (
+                <div className="possession-readout">
+                  <span className="us">{formatTime(possDurations.us)} · {possPct(possDurations.us)}%</span>
+                  <span className="neutral">{formatTime(possDurations.neutral)} · {possPct(possDurations.neutral)}%</span>
+                  <span className="opp">{formatTime(possDurations.opp)} · {possPct(possDurations.opp)}%</span>
+                </div>
+              )}
+            </div>
+            <div className="hint">Tab : équipe · Espace : lecture/pause</div>
           </div>
 
-          {activeTab === "journal" && (
+          <div className="event-categories-row">
+            {EVENT_CATEGORIES.map((cat) => (
+              <div className="event-category" key={cat.id}>
+                <div className="event-category-label">{cat.label}</div>
+                <div className="event-grid">
+                  {cat.events.map((ev) => (
+                    <button
+                      key={ev.key}
+                      className={`event-btn ${ev.positive ? "pos" : "neg"} ${!videoUrl ? "disabled" : ""}`}
+                      onClick={() => videoUrl && addTag(ev.key)}
+                      disabled={!videoUrl}
+                    >
+                      <span className="event-hotkey">{ev.hotkey}</span>
+                      {ev.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="panel-col">
+          <div className="panel-section">
+            <div className="panel-heading">Journal ({match.tags.length})</div>
             <div className="journal">
               {match.tags.length === 0 && <div className="empty-state">Aucune action taguée pour l'instant.</div>}
               {match.tags.slice().reverse().map((t) => {
@@ -616,117 +708,124 @@ function TaggingScreen(props) {
                 );
               })}
             </div>
-          )}
-
-          {activeTab === "stats" && stats && (
-            <div className="stats-panel">
-              {possTotal > 0 && (
-                <div className="possession-summary">
-                  <div className="ratio-label">Possession</div>
-                  <div className="possession-bar">
-                    {possPct(possDurations.us) > 0 && <div className="possession-seg us" style={{ width: `${possPct(possDurations.us)}%` }} />}
-                    {possPct(possDurations.neutral) > 0 && <div className="possession-seg neutral" style={{ width: `${possPct(possDurations.neutral)}%` }} />}
-                    {possPct(possDurations.opp) > 0 && <div className="possession-seg opp" style={{ width: `${possPct(possDurations.opp)}%` }} />}
-                  </div>
-                  <div className="possession-legend">
-                    <span><i className="dot us" />Nous {possPct(possDurations.us)}%</span>
-                    <span><i className="dot neutral" />Neutre {possPct(possDurations.neutral)}%</span>
-                    <span><i className="dot opp" />Adversaire {possPct(possDurations.opp)}%</span>
-                  </div>
-                </div>
-              )}
-              <div className="ratio-grid">
-                <RatioCard label="Précision de contrôle" us={stats.controlePct.us} opp={stats.controlePct.opp} />
-                <RatioCard label="Précision de passe" us={stats.passPct.us} opp={stats.passPct.opp} />
-                <RatioCard label="Tirs cadrés" us={stats.shotPct.us} opp={stats.shotPct.opp} />
-                <RatioCard label="Tacles réussis" us={stats.tacklePct.us} opp={stats.tacklePct.opp} />
-                <RatioCard label="Duels aériens" us={stats.duelPct.us} opp={stats.duelPct.opp} />
-              </div>
-              <div className="chart-wrap">
-                <ResponsiveContainer width="100%" height={280}>
-                  <BarChart data={chartData} margin={{ top: 10, right: 10, left: -10, bottom: 0 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#26362C" vertical={false} />
-                    <XAxis dataKey="name" stroke="#8FA599" fontSize={11} interval={0} angle={-20} textAnchor="end" height={60} />
-                    <YAxis stroke="#8FA599" fontSize={11} allowDecimals={false} />
-                    <Tooltip contentStyle={{ background: "#182A21", border: "1px solid #26362C", borderRadius: 6, color: "#EEF3EC" }} />
-                    <Bar dataKey="Nous" fill="#E3B23C" radius={[3, 3, 0, 0]} />
-                    <Bar dataKey="Adversaire" fill="#D6483F" radius={[3, 3, 0, 0]} />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-              {playerStats.length > 0 && (
-                <div className="player-stats">
-                  <div className="ratio-label">Par joueur</div>
-                  {playerStats.map((p) => (
-                    <div className="player-stat-row" key={`${p.team}_${p.player}`}>
-                      <span className={`team-dot ${p.team}`} />
-                      <span className="player-stat-num">n°{p.player}</span>
-                      <span className="player-stat-count">{p.total} action{p.total > 1 ? "s" : ""}</span>
-                      <span className="player-stat-pos">{p.positive} positive{p.positive > 1 ? "s" : ""}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-
-        <div className="side-col">
-          {pendingPlayerTag && (
-            <div className={`player-picker ${pendingPlayerTag.team}`}>
-              <div className="player-picker-label">
-                Quel joueur ? <span className="player-picker-team">{pendingPlayerTag.team === "us" ? "Nous" : "Adversaire"}</span>
-              </div>
-              <div className="player-picker-grid">
-                {Array.from({ length: 20 }, (_, i) => i + 1).map((n) => (
-                  <button key={n} className="player-picker-btn" onClick={() => assignPendingPlayer(n)}>{n}</button>
-                ))}
-              </div>
-              <button className="player-picker-skip" onClick={dismissPendingPlayer}>Passer</button>
-            </div>
-          )}
-
-          <div className="team-toggle">
-            <button className={`team-btn us ${activeTeam === "us" ? "active" : ""}`} onClick={() => setActiveTeam("us")}>NOUS</button>
-            <button className={`team-btn opp ${activeTeam === "opp" ? "active" : ""}`} onClick={() => setActiveTeam("opp")}>ADVERSAIRE</button>
           </div>
 
-          <div className="possession-block">
-            <div className="event-category-label">Possession</div>
-            <div className="possession-toggle">
-              <button className={`poss-btn us ${possessionTeam === "us" ? "active" : ""} ${!videoUrl ? "disabled" : ""}`} onClick={() => videoUrl && setPossession("us")} disabled={!videoUrl}>Nous</button>
-              <button className={`poss-btn neutral ${possessionTeam === "neutral" ? "active" : ""} ${!videoUrl ? "disabled" : ""}`} onClick={() => videoUrl && setPossession("neutral")} disabled={!videoUrl}>Neutre</button>
-              <button className={`poss-btn opp ${possessionTeam === "opp" ? "active" : ""} ${!videoUrl ? "disabled" : ""}`} onClick={() => videoUrl && setPossession("opp")} disabled={!videoUrl}>Adv.</button>
+          {stats && (
+            <div className="panel-section">
+              <div className="panel-heading">Statistiques</div>
+              <div className="stats-panel">
+                {possTotal > 0 && (
+                  <div className="possession-summary">
+                    <div className="ratio-label">Possession</div>
+                    <div className="possession-bar">
+                      {possPct(possDurations.us) > 0 && <div className="possession-seg us" style={{ width: `${possPct(possDurations.us)}%` }} />}
+                      {possPct(possDurations.neutral) > 0 && <div className="possession-seg neutral" style={{ width: `${possPct(possDurations.neutral)}%` }} />}
+                      {possPct(possDurations.opp) > 0 && <div className="possession-seg opp" style={{ width: `${possPct(possDurations.opp)}%` }} />}
+                    </div>
+                    <div className="possession-legend">
+                      <span><i className="dot us" />Nous {possPct(possDurations.us)}%</span>
+                      <span><i className="dot neutral" />Neutre {possPct(possDurations.neutral)}%</span>
+                      <span><i className="dot opp" />Adversaire {possPct(possDurations.opp)}%</span>
+                    </div>
+                  </div>
+                )}
+                <div className="ratio-grid">
+                  <RatioCard label="Précision de contrôle" us={stats.controlePct.us} opp={stats.controlePct.opp} />
+                  <RatioCard label="Précision de passe" us={stats.passPct.us} opp={stats.passPct.opp} />
+                  <RatioCard label="Tirs cadrés" us={stats.shotPct.us} opp={stats.shotPct.opp} />
+                  <RatioCard label="Tacles réussis" us={stats.tacklePct.us} opp={stats.tacklePct.opp} />
+                  <RatioCard label="Duels aériens" us={stats.duelPct.us} opp={stats.duelPct.opp} />
+                </div>
+                <div className="chart-wrap">
+                  <ResponsiveContainer width="100%" height={220}>
+                    <BarChart data={chartData} margin={{ top: 10, right: 10, left: -10, bottom: 0 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#26362C" vertical={false} />
+                      <XAxis dataKey="name" stroke="#8FA599" fontSize={10} interval={0} angle={-30} textAnchor="end" height={60} />
+                      <YAxis stroke="#8FA599" fontSize={10} allowDecimals={false} />
+                      <Tooltip contentStyle={{ background: "#182A21", border: "1px solid #26362C", borderRadius: 6, color: "#EEF3EC" }} />
+                      <Bar dataKey="Nous" fill="#E3B23C" radius={[3, 3, 0, 0]} />
+                      <Bar dataKey="Adversaire" fill="#D6483F" radius={[3, 3, 0, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+                {playerStats.length > 0 && (
+                  <div className="player-stats">
+                    <div className="ratio-label">Par joueur</div>
+                    {playerStats.map((p) => (
+                      <div className="player-stat-row" key={`${p.team}_${p.player}`}>
+                        <span className={`team-dot ${p.team}`} />
+                        <span className="player-stat-num">n°{p.player}</span>
+                        <span className="player-stat-count">{p.total} action{p.total > 1 ? "s" : ""}</span>
+                        <span className="player-stat-pos">{p.positive} positive{p.positive > 1 ? "s" : ""}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
-            {possTotal > 0 && (
-              <div className="possession-readout">
-                <span className="us">{formatTime(possDurations.us)} · {possPct(possDurations.us)}%</span>
-                <span className="neutral">{formatTime(possDurations.neutral)} · {possPct(possDurations.neutral)}%</span>
-                <span className="opp">{formatTime(possDurations.opp)} · {possPct(possDurations.opp)}%</span>
+          )}
+
+          <div className="panel-section">
+            <div className="panel-heading">Compilations vidéo</div>
+            {!videoUrl && <div className="empty-state">Charge une vidéo pour pouvoir générer des compilations.</div>}
+            {videoUrl && (
+              <div className="compile-panel">
+                {compilationJob && (
+                  <div className="compile-progress">
+                    <div className="compile-progress-label">{compilationJob.label} — {compilationJob.phase}</div>
+                    <div className="compile-progress-bar"><div style={{ width: `${compilationJob.pct}%` }} /></div>
+                  </div>
+                )}
+                {compilations.length > 0 && (
+                  <div className="compile-results">
+                    {compilations.map((c) => (
+                      <a key={c.id} className="compile-result-row" href={c.url} download={`${c.label.replace(/\s+/g, "_")}.mp4`}>
+                        <Film size={13} />
+                        <span className="compile-result-label">{c.label}</span>
+                        <span className="compile-result-meta">{c.count} clips · {(c.size / (1024 * 1024)).toFixed(1)} Mo</span>
+                        <Download size={13} />
+                      </a>
+                    ))}
+                  </div>
+                )}
+                <div className="compile-list-label">Par action</div>
+                <div className="compile-list">
+                  {eventCompilationRows.length === 0 && <div className="empty-state">Tague quelques actions pour débloquer la génération.</div>}
+                  {eventCompilationRows.map((row) => (
+                    <button
+                      key={row.key}
+                      className="compile-row-btn"
+                      disabled={!!compilationJob}
+                      onClick={() => runCompilation(row.label, row.times)}
+                    >
+                      <Film size={12} />
+                      <span>{row.label}</span>
+                      <span className="compile-row-count">{row.times.length}</span>
+                    </button>
+                  ))}
+                </div>
+                {playerStats.length > 0 && (
+                  <>
+                    <div className="compile-list-label">Par joueur</div>
+                    <div className="compile-list">
+                      {playerStats.map((p) => (
+                        <button
+                          key={`compile_${p.team}_${p.player}`}
+                          className="compile-row-btn"
+                          disabled={!!compilationJob}
+                          onClick={() => runCompilation(`Joueur n°${p.player} (${p.team === "us" ? "Nous" : "Adversaire"})`, p.times)}
+                        >
+                          <Film size={12} />
+                          <span>n°{p.player} — {p.team === "us" ? "Nous" : "Adversaire"}</span>
+                          <span className="compile-row-count">{p.total}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </>
+                )}
               </div>
             )}
           </div>
-
-          <div className="hint">Tab : équipe · Espace : lecture/pause</div>
-
-          {EVENT_CATEGORIES.map((cat) => (
-            <div className="event-category" key={cat.id}>
-              <div className="event-category-label">{cat.label}</div>
-              <div className="event-grid">
-                {cat.events.map((ev) => (
-                  <button
-                    key={ev.key}
-                    className={`event-btn ${ev.positive ? "pos" : "neg"} ${!videoUrl ? "disabled" : ""}`}
-                    onClick={() => videoUrl && addTag(ev.key)}
-                    disabled={!videoUrl}
-                  >
-                    <span className="event-hotkey">{ev.hotkey}</span>
-                    {ev.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-          ))}
         </div>
       </div>
     </div>
@@ -841,8 +940,27 @@ const CSS = `
   .save-indicator { font-size: 11px; color: var(--ink-muted); font-variant-numeric: tabular-nums; }
   .save-indicator.error { color: var(--crimson); }
 
-  .tagging-grid { display: grid; grid-template-columns: 1fr 340px; gap: 18px; padding: 18px; flex: 1; min-height: 0; }
-  @media (max-width: 860px) { .tagging-grid { grid-template-columns: 1fr; } }
+  .tagging-grid {
+    display: grid;
+    grid-template-columns: 1fr 300px;
+    grid-template-areas: "video video" "selectors panel";
+    gap: 18px;
+    padding: 18px;
+    flex: 1;
+    min-height: 0;
+  }
+  .video-section { grid-area: video; }
+  .selectors-col { grid-area: selectors; display: flex; flex-direction: column; gap: 14px; }
+  .panel-col { grid-area: panel; display: flex; flex-direction: column; gap: 20px; }
+  @media (max-width: 1000px) {
+    .tagging-grid { grid-template-columns: 1fr; grid-template-areas: "video" "selectors" "panel"; }
+  }
+  .selectors-header { display: flex; flex-direction: column; gap: 10px; }
+  .event-categories-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  @media (max-width: 700px) {
+    .event-categories-row { grid-template-columns: 1fr; }
+  }
+  .panel-heading { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-muted); font-weight: 700; margin-bottom: 8px; }
 
   .video-placeholder { position: relative; background: var(--surface); border: 1px dashed var(--line); border-radius: 10px; padding: 48px 20px; text-align: center; color: var(--ink-muted); display: flex; flex-direction: column; align-items: center; gap: 14px; }
   .video-wrap { position: relative; background: black; border-radius: 10px; overflow: hidden; }
@@ -948,4 +1066,19 @@ const CSS = `
   .event-btn.neg:hover { border-color: var(--crimson); }
   .event-btn.disabled { opacity: 0.4; cursor: not-allowed; }
   .event-hotkey { position: absolute; left: 8px; top: 50%; transform: translateY(-50%); font-size: 10px; color: var(--ink-muted); font-weight: 800; }
+
+  .compile-progress { background: var(--surface); border: 1px solid var(--gold); border-radius: 8px; padding: 10px 12px; margin-bottom: 12px; }
+  .compile-progress-label { font-size: 11px; color: var(--ink); margin-bottom: 6px; }
+  .compile-progress-bar { height: 6px; background: var(--bg); border-radius: 3px; overflow: hidden; }
+  .compile-progress-bar > div { height: 100%; background: var(--gold); transition: width 0.2s ease; }
+  .compile-results { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; }
+  .compile-result-row { display: flex; align-items: center; gap: 8px; background: var(--surface); border: 1px solid var(--gold); border-radius: 6px; padding: 8px 10px; font-size: 11px; color: var(--ink); text-decoration: none; }
+  .compile-result-label { flex: 1; }
+  .compile-result-meta { color: var(--ink-muted); font-size: 10px; white-space: nowrap; }
+  .compile-list-label { font-size: 10px; text-transform: uppercase; color: var(--ink-muted); font-weight: 700; margin: 10px 0 6px; }
+  .compile-list { display: flex; flex-direction: column; gap: 4px; max-height: 220px; overflow-y: auto; }
+  .compile-row-btn { display: flex; align-items: center; gap: 8px; background: var(--surface); border: 1px solid var(--line); color: var(--ink); border-radius: 6px; padding: 7px 10px; font-size: 11px; text-align: left; }
+  .compile-row-btn:hover { border-color: var(--gold); }
+  .compile-row-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .compile-row-count { margin-left: auto; color: var(--ink-muted); font-variant-numeric: tabular-nums; }
 `;
