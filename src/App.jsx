@@ -170,14 +170,30 @@ function computeRatingSuggestions(match) {
     if (ev.positive) teamAgg[t.team].pos++; else teamAgg[t.team].neg++;
     if (t.eventKey === "but") teamAgg[t.team].but++;
   });
-  const usTotal = teamAgg.us.pos + teamAgg.us.neg;
-  const oppTotal = teamAgg.opp.pos + teamAgg.opp.neg;
-  const usRatio = usTotal > 0 ? teamAgg.us.pos / usTotal : 0.5;
-  const oppRatio = oppTotal > 0 ? teamAgg.opp.pos / oppTotal : 0.5;
-  let teamScore = 5 + (usRatio - oppRatio) * 5 + (teamAgg.us.but - teamAgg.opp.but) * 0.8;
-  teamScore = Math.max(0, Math.min(10, Math.round(teamScore * 2) / 2));
+  function teamStatScore(team, other) {
+    const totalT = teamAgg[team].pos + teamAgg[team].neg;
+    const totalO = teamAgg[other].pos + teamAgg[other].neg;
+    const ratioT = totalT > 0 ? teamAgg[team].pos / totalT : 0.5;
+    const ratioO = totalO > 0 ? teamAgg[other].pos / totalO : 0.5;
+    const s = 5 + (ratioT - ratioO) * 5 + (teamAgg[team].but - teamAgg[other].but) * 0.8;
+    return Math.max(0, Math.min(10, Math.round(s * 2) / 2));
+  }
 
-  return { players, team: teamScore };
+  const teamPlayerAvg = { us: null, opp: null };
+  ["us", "opp"].forEach((team) => {
+    const scores = Object.entries(players)
+      .filter(([k]) => k.startsWith(`${team}_`))
+      .map(([, v]) => v);
+    if (scores.length > 0) {
+      teamPlayerAvg[team] = Math.round((scores.reduce((a, b) => a + b, 0) / scores.length) * 2) / 2;
+    }
+  });
+
+  return {
+    players,
+    team: { us: teamStatScore("us", "opp"), opp: teamStatScore("opp", "us") },
+    teamPlayerAvg,
+  };
 }
 
 export default function App() {
@@ -356,14 +372,17 @@ export default function App() {
     updateMatch((m) => ({ ...m, tags: m.tags.map((t) => (t.id === tagId ? { ...t, player } : t)) }));
   }
 
-  function setTeamRating(score, comment) {
-    updateMatch((m) => ({ ...m, ratings: { ...(m.ratings || {}), team: { score, comment } } }));
-  }
-
-  function setPlayerRating(key, score, comment) {
+  function setTeamRating(team, coachScore, comment) {
     updateMatch((m) => ({
       ...m,
-      ratings: { ...(m.ratings || {}), players: { ...((m.ratings && m.ratings.players) || {}), [key]: { score, comment } } },
+      ratings: { ...(m.ratings || {}), team: { ...((m.ratings && m.ratings.team) || {}), [team]: { coachScore, comment } } },
+    }));
+  }
+
+  function setPlayerRating(key, coachScore, comment) {
+    updateMatch((m) => ({
+      ...m,
+      ratings: { ...(m.ratings || {}), players: { ...((m.ratings && m.ratings.players) || {}), [key]: { coachScore, comment } } },
     }));
   }
 
@@ -560,8 +579,9 @@ function HomeScreen({ matches, matchesLoaded, showNewForm, setShowNewForm, newMa
 
 function RatingScreen({ match, setTeamRating, setPlayerRating, goHome, goTagging, saveStatus }) {
   const suggestions = useMemo(() => computeRatingSuggestions(match), [match.tags]);
+  const [newPlayerNum, setNewPlayerNum] = useState({ us: "", opp: "" });
 
-  const playerList = useMemo(() => {
+  const combinedPlayers = useMemo(() => {
     const seen = new Map();
     match.tags.forEach((t) => {
       if (!t.player) return;
@@ -569,11 +589,52 @@ function RatingScreen({ match, setTeamRating, setPlayerRating, goHome, goTagging
       if (!seen.has(key)) seen.set(key, { team: t.team, player: t.player, total: 0 });
       seen.get(key).total++;
     });
-    return Array.from(seen.values()).sort((a, b) => (a.team !== b.team ? (a.team === "us" ? -1 : 1) : b.total - a.total));
-  }, [match.tags]);
+    const ratingsPlayers = (match.ratings && match.ratings.players) || {};
+    Object.keys(ratingsPlayers).forEach((key) => {
+      if (seen.has(key)) return;
+      const [team, player] = [key.slice(0, key.indexOf("_")), key.slice(key.indexOf("_") + 1)];
+      seen.set(key, { team, player, total: 0 });
+    });
+    return Array.from(seen.values()).sort((a, b) => b.total - a.total);
+  }, [match.tags, match.ratings]);
 
-  const teamRating = (match.ratings && match.ratings.team) || null;
-  const teamScore = teamRating ? teamRating.score : suggestions.team;
+  function addManualPlayer(team) {
+    const num = (newPlayerNum[team] || "").replace(/[^0-9]/g, "");
+    if (!num) return;
+    const key = `${team}_${num}`;
+    const existing = (match.ratings && match.ratings.players && match.ratings.players[key]) || null;
+    if (!existing) setPlayerRating(key, null, "");
+    setNewPlayerNum((prev) => ({ ...prev, [team]: "" }));
+  }
+
+  function downloadRatings() {
+    const rows = [["Équipe", "Joueur", "Suggestion", "Moyenne joueurs", "Note du coach", "Commentaire"]];
+    ["us", "opp"].forEach((team) => {
+      const teamLabel = team === "us" ? "Nous" : "Adversaire";
+      const tRating = (match.ratings && match.ratings.team && match.ratings.team[team]) || null;
+      rows.push([
+        teamLabel,
+        "Équipe (ensemble)",
+        suggestions.team[team],
+        suggestions.teamPlayerAvg[team] != null ? suggestions.teamPlayerAvg[team] : "",
+        tRating && tRating.coachScore != null ? tRating.coachScore : "",
+        tRating ? tRating.comment : "",
+      ]);
+      combinedPlayers.filter((p) => p.team === team).forEach((p) => {
+        const key = `${p.team}_${p.player}`;
+        const r = (match.ratings && match.ratings.players && match.ratings.players[key]) || null;
+        rows.push([
+          teamLabel,
+          `n°${p.player}`,
+          p.total > 0 ? suggestions.players[key] : "",
+          "",
+          r && r.coachScore != null ? r.coachScore : "",
+          r ? r.comment : "",
+        ]);
+      });
+    });
+    downloadCSV(`${match.name.replace(/\s+/g, "_")}_notations.csv`, rows);
+  }
 
   return (
     <div className="tagging">
@@ -584,70 +645,125 @@ function RatingScreen({ match, setTeamRating, setPlayerRating, goHome, goTagging
           <div className="topbar-meta">vs {match.opponent}</div>
         </div>
         <SaveIndicator status={saveStatus} />
+        <button className="btn btn-ghost btn-small" onClick={downloadRatings}><Download size={13} /> CSV</button>
         <button className="btn btn-ghost btn-small" onClick={goTagging}>Retour au tagging</button>
       </div>
 
       <div className="rating-content">
         <p className="rating-explainer">
-          Les suggestions sont calculées à partir du ratio d'actions positives/négatives de chaque match (buts, cartons et arrêts pèsent davantage) — à ajuster librement selon ton propre regard sur la prestation.
+          La <strong>suggestion</strong> est calculée automatiquement à partir des actions taguées et ne change jamais toute seule. La <strong>note du coach</strong> est un champ à part, entièrement libre — c'est celle-là qui reflète ton propre ressenti.
         </p>
 
-        <div className="rating-card team-rating-card">
-          <div className="rating-card-header">
-            <span className="rating-card-title">Note d'équipe</span>
-            <span className="rating-suggestion">Suggestion : {suggestions.team}/10</span>
+        <div className="rating-columns">
+          {["us", "opp"].map((team) => (
+            <RatingColumn
+              key={team}
+              team={team}
+              match={match}
+              suggestions={suggestions}
+              players={combinedPlayers.filter((p) => p.team === team)}
+              setTeamRating={setTeamRating}
+              setPlayerRating={setPlayerRating}
+              newPlayerNum={newPlayerNum[team]}
+              setNewPlayerNum={(v) => setNewPlayerNum((prev) => ({ ...prev, [team]: v }))}
+              addManualPlayer={() => addManualPlayer(team)}
+            />
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function RatingColumn({ team, match, suggestions, players, setTeamRating, setPlayerRating, newPlayerNum, setNewPlayerNum, addManualPlayer }) {
+  const teamLabel = team === "us" ? "Nous" : "Adversaire";
+  const teamRating = (match.ratings && match.ratings.team && match.ratings.team[team]) || null;
+
+  return (
+    <div className="rating-column">
+      <h3 className={`rating-column-title ${team}`}>{teamLabel}</h3>
+
+      <div className={`rating-card team-rating-card ${team}`}>
+        <div className="rating-card-header">
+          <span className="rating-card-title">Équipe — {teamLabel}</span>
+        </div>
+        <div className="rating-values-row">
+          <div className="rating-value-block">
+            <span className="rating-value-label">Suggestion</span>
+            <span className="rating-value-suggestion">{suggestions.team[team]}/10</span>
           </div>
-          <div className="rating-input-row">
+          <div className="rating-value-block">
+            <span className="rating-value-label">Moyenne joueurs</span>
+            <span className="rating-value-suggestion">{suggestions.teamPlayerAvg[team] != null ? `${suggestions.teamPlayerAvg[team]}/10` : "—"}</span>
+          </div>
+          <div className="rating-value-block">
+            <span className="rating-value-label">Note du coach</span>
             <input
               type="number" min={0} max={10} step={0.5}
-              value={teamScore}
-              onChange={(e) => setTeamRating(Number(e.target.value), teamRating ? teamRating.comment : "")}
+              placeholder="—"
+              value={teamRating && teamRating.coachScore != null ? teamRating.coachScore : ""}
+              onChange={(e) => setTeamRating(team, e.target.value === "" ? null : Number(e.target.value), teamRating ? teamRating.comment : "")}
             />
-            <span>/10</span>
           </div>
-          <textarea
-            className="rating-comment"
-            placeholder="Commentaire sur la prestation collective..."
-            value={teamRating ? teamRating.comment : ""}
-            onChange={(e) => setTeamRating(teamScore, e.target.value)}
-          />
         </div>
+        <textarea
+          className="rating-comment"
+          placeholder="Commentaire sur la prestation collective..."
+          value={teamRating ? teamRating.comment : ""}
+          onChange={(e) => setTeamRating(team, teamRating ? teamRating.coachScore : null, e.target.value)}
+        />
+      </div>
 
-        <div className="panel-heading">Notation individuelle</div>
-        {playerList.length === 0 && (
-          <div className="empty-state">Aucun joueur associé à une action pour l'instant. Attribue des numéros pendant le tagging pour les voir apparaître ici.</div>
-        )}
-        <div className="player-rating-list">
-          {playerList.map((p) => {
-            const key = `${p.team}_${p.player}`;
-            const rating = (match.ratings && match.ratings.players && match.ratings.players[key]) || null;
-            const suggestion = suggestions.players[key] != null ? suggestions.players[key] : 5;
-            const score = rating ? rating.score : suggestion;
-            return (
-              <div className="rating-card player-rating-card" key={key}>
-                <div className="rating-card-header">
-                  <span className={`team-dot ${p.team}`} />
-                  <span className="rating-card-title">n°{p.player} <span className="rating-card-sub">({p.team === "us" ? "Nous" : "Adversaire"} · {p.total} actions)</span></span>
-                  <span className="rating-suggestion">Suggestion : {suggestion}/10</span>
+      <div className="panel-heading">Notation individuelle — {teamLabel}</div>
+      {players.length === 0 && (
+        <div className="empty-state">Aucun joueur pour l'instant. Tague une action ou ajoute un numéro manuellement ci-dessous.</div>
+      )}
+      <div className="player-rating-list">
+        {players.map((p) => {
+          const key = `${p.team}_${p.player}`;
+          const rating = (match.ratings && match.ratings.players && match.ratings.players[key]) || null;
+          const hasActions = p.total > 0;
+          const suggestion = suggestions.players[key];
+          return (
+            <div className="rating-card player-rating-card" key={key}>
+              <div className="rating-card-header">
+                <span className={`team-dot ${team}`} />
+                <span className="rating-card-title">n°{p.player} <span className="rating-card-sub">({p.total} action{p.total !== 1 ? "s" : ""})</span></span>
+              </div>
+              <div className="rating-values-row">
+                <div className="rating-value-block">
+                  <span className="rating-value-label">Suggestion</span>
+                  <span className="rating-value-suggestion">{hasActions ? `${suggestion}/10` : "—"}</span>
                 </div>
-                <div className="rating-input-row">
+                <div className="rating-value-block">
+                  <span className="rating-value-label">Note du coach</span>
                   <input
                     type="number" min={0} max={10} step={0.5}
-                    value={score}
-                    onChange={(e) => setPlayerRating(key, Number(e.target.value), rating ? rating.comment : "")}
+                    placeholder="—"
+                    disabled={!hasActions}
+                    value={rating && rating.coachScore != null ? rating.coachScore : ""}
+                    onChange={(e) => setPlayerRating(key, e.target.value === "" ? null : Number(e.target.value), rating ? rating.comment : "")}
                   />
-                  <span>/10</span>
                 </div>
-                <input
-                  className="rating-comment-inline"
-                  placeholder="Commentaire (optionnel)"
-                  value={rating ? rating.comment : ""}
-                  onChange={(e) => setPlayerRating(key, score, e.target.value)}
-                />
               </div>
-            );
-          })}
-        </div>
+              <input
+                className="rating-comment-inline"
+                placeholder={hasActions ? "Commentaire (optionnel)" : "Ex. présent, n'a pas joué..."}
+                value={rating ? rating.comment : ""}
+                onChange={(e) => setPlayerRating(key, rating ? rating.coachScore : null, e.target.value)}
+              />
+            </div>
+          );
+        })}
+      </div>
+      <div className="add-player-row">
+        <input
+          type="text" inputMode="numeric" placeholder="N° joueur"
+          value={newPlayerNum}
+          onChange={(e) => setNewPlayerNum(e.target.value.replace(/[^0-9]/g, "").slice(0, 2))}
+          onKeyDown={(e) => e.key === "Enter" && addManualPlayer()}
+        />
+        <button className="btn btn-ghost btn-small" onClick={addManualPlayer}>+ Ajouter un joueur</button>
       </div>
     </div>
   );
@@ -1401,18 +1517,28 @@ const CSS = `
   .compile-icon:disabled { opacity: 0.35; cursor: not-allowed; }
   .compile-icon.spinning { font-size: 13px; border-style: dashed; }
 
-  .rating-content { max-width: 760px; margin: 0 auto; padding: 24px 18px 40px; }
-  .rating-explainer { font-size: 12px; color: var(--ink-muted); line-height: 1.6; margin: 0 0 20px; }
+  .rating-content { max-width: 1100px; margin: 0 auto; padding: 24px 18px 40px; }
+  .rating-explainer { font-size: 12px; color: var(--ink-muted); line-height: 1.6; margin: 0 0 20px; max-width: 720px; }
+  .rating-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; align-items: start; }
+  @media (max-width: 900px) { .rating-columns { grid-template-columns: 1fr; } }
+  .rating-column-title { font-size: 15px; font-weight: 800; margin: 0 0 12px; }
+  .rating-column-title.us { color: var(--gold); }
+  .rating-column-title.opp { color: var(--crimson); }
   .rating-card { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 16px; margin-bottom: 12px; }
-  .team-rating-card { border-color: var(--gold); }
+  .team-rating-card.us { border-color: var(--gold); }
+  .team-rating-card.opp { border-color: var(--crimson); }
   .rating-card-header { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
-  .rating-card-title { font-weight: 700; font-size: 14px; flex: 1; }
-  .rating-card-sub { font-weight: 400; color: var(--ink-muted); font-size: 12px; }
-  .rating-suggestion { font-size: 11px; color: var(--ink-muted); white-space: nowrap; }
-  .rating-input-row { display: flex; align-items: center; gap: 6px; margin-bottom: 10px; }
-  .rating-input-row input[type="number"] { width: 64px; background: var(--bg); border: 1px solid var(--line); color: var(--gold); font-weight: 800; font-size: 18px; text-align: center; border-radius: 6px; padding: 6px; }
-  .rating-input-row span { color: var(--ink-muted); font-size: 13px; }
-  .rating-comment { width: 100%; min-height: 60px; background: var(--bg); border: 1px solid var(--line); color: var(--ink); border-radius: 6px; padding: 8px 10px; font-size: 12px; font-family: inherit; resize: vertical; }
+  .rating-card-title { font-weight: 700; font-size: 13px; flex: 1; }
+  .rating-card-sub { font-weight: 400; color: var(--ink-muted); font-size: 11px; }
+  .rating-values-row { display: flex; gap: 16px; margin-bottom: 10px; }
+  .rating-value-block { display: flex; flex-direction: column; gap: 4px; }
+  .rating-value-label { font-size: 9px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--ink-muted); font-weight: 700; }
+  .rating-value-suggestion { font-size: 16px; font-weight: 800; color: var(--ink-muted); }
+  .rating-values-row input[type="number"] { width: 60px; background: var(--bg); border: 1px solid var(--line); color: var(--gold); font-weight: 800; font-size: 16px; text-align: center; border-radius: 6px; padding: 5px; }
+  .rating-values-row input[type="number"]:disabled { opacity: 0.3; cursor: not-allowed; }
+  .rating-comment { width: 100%; min-height: 56px; background: var(--bg); border: 1px solid var(--line); color: var(--ink); border-radius: 6px; padding: 8px 10px; font-size: 12px; font-family: inherit; resize: vertical; }
   .rating-comment-inline { width: 100%; background: var(--bg); border: 1px solid var(--line); color: var(--ink); border-radius: 6px; padding: 6px 10px; font-size: 12px; font-family: inherit; }
-  .player-rating-list { display: flex; flex-direction: column; gap: 10px; }
+  .player-rating-list { display: flex; flex-direction: column; gap: 10px; margin-bottom: 10px; }
+  .add-player-row { display: flex; gap: 8px; }
+  .add-player-row input { width: 90px; background: var(--surface); border: 1px solid var(--line); color: var(--ink); border-radius: 6px; padding: 6px 10px; font-size: 12px; }
 `;
