@@ -1,5 +1,4 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 import { Play, Pause, ArrowLeft, X, Download, Video as VideoIcon, Film } from "lucide-react";
 import { generateCompilation } from "./videoCompiler";
 
@@ -8,10 +7,10 @@ const EVENT_CATEGORIES = [
     id: "offensif",
     label: "Offensif",
     events: [
-      { key: "controle_ok", label: "Contrôle réussi", hotkey: "H", positive: true },
-      { key: "controle_ko", label: "Contrôle manqué", hotkey: "L", positive: false },
       { key: "passe_ok", label: "Passe réussie", hotkey: "A", positive: true },
       { key: "passe_ko", label: "Passe manquée", hotkey: "Z", positive: false },
+      { key: "controle_ok", label: "Contrôle réussi", hotkey: "H", positive: true },
+      { key: "controle_ko", label: "Contrôle manqué", hotkey: "L", positive: false },
       { key: "centre_ok", label: "Centre réussi", hotkey: "C", positive: true },
       { key: "centre_ko", label: "Centre manqué", hotkey: "V", positive: false },
       { key: "dribble_ok", label: "Dribble réussi", hotkey: "D", positive: true },
@@ -30,8 +29,23 @@ const EVENT_CATEGORIES = [
       { key: "tacle_ok", label: "Tacle réussi", hotkey: "T", positive: true },
       { key: "tacle_ko", label: "Tacle manqué", hotkey: "G", positive: false },
       { key: "interception", label: "Interception", hotkey: "I", positive: true },
+      { key: "degagement", label: "Dégagement", hotkey: "M", positive: true },
       { key: "duel_ok", label: "Duel aérien gagné", hotkey: "U", positive: true },
       { key: "duel_ko", label: "Duel aérien perdu", hotkey: "J", positive: false },
+    ],
+  },
+  {
+    id: "gardien",
+    label: "Gardien",
+    events: [
+      { key: "gardien_arret_ok", label: "Arrêt réussi", hotkey: "1", positive: true },
+      { key: "gardien_arret_ko", label: "Arrêt manqué", hotkey: "2", positive: false },
+      { key: "gardien_sortie_ok", label: "Sortie aérienne réussie", hotkey: "3", positive: true },
+      { key: "gardien_sortie_ko", label: "Sortie aérienne manquée", hotkey: "4", positive: false },
+      { key: "gardien_relance_ok", label: "Relance réussie", hotkey: "5", positive: true },
+      { key: "gardien_relance_ko", label: "Relance manquée", hotkey: "6", positive: false },
+      { key: "gardien_duel_ok", label: "Duel gardien gagné", hotkey: "7", positive: true },
+      { key: "gardien_duel_ko", label: "Duel gardien perdu", hotkey: "8", positive: false },
     ],
   },
   {
@@ -327,39 +341,6 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [screen, activeTeam, videoDuration]);
 
-  const stats = useMemo(() => {
-    if (!currentMatch) return null;
-    const byTeam = { us: {}, opp: {} };
-    ALL_EVENTS.forEach((ev) => { byTeam.us[ev.key] = 0; byTeam.opp[ev.key] = 0; });
-    currentMatch.tags.forEach((t) => {
-      if (byTeam[t.team] && byTeam[t.team][t.eventKey] !== undefined) byTeam[t.team][t.eventKey]++;
-    });
-    const pct = (made, missed) => {
-      const total = made + missed;
-      return total === 0 ? null : Math.round((made / total) * 100);
-    };
-    return {
-      byTeam,
-      controlePct: { us: pct(byTeam.us.controle_ok, byTeam.us.controle_ko), opp: pct(byTeam.opp.controle_ok, byTeam.opp.controle_ko) },
-      passPct: { us: pct(byTeam.us.passe_ok, byTeam.us.passe_ko), opp: pct(byTeam.opp.passe_ok, byTeam.opp.passe_ko) },
-      shotPct: { us: pct(byTeam.us.tir_cadre, byTeam.us.tir_hc), opp: pct(byTeam.opp.tir_cadre, byTeam.opp.tir_hc) },
-      tacklePct: { us: pct(byTeam.us.tacle_ok, byTeam.us.tacle_ko), opp: pct(byTeam.opp.tacle_ok, byTeam.opp.tacle_ko) },
-      duelPct: { us: pct(byTeam.us.duel_ok, byTeam.us.duel_ko), opp: pct(byTeam.opp.duel_ok, byTeam.opp.duel_ko) },
-    };
-  }, [currentMatch]);
-
-  const chartData = useMemo(() => {
-    if (!stats) return [];
-    return [
-      { name: "Tirs cadrés", Nous: stats.byTeam.us.tir_cadre, Adversaire: stats.byTeam.opp.tir_cadre },
-      { name: "Buts", Nous: stats.byTeam.us.but, Adversaire: stats.byTeam.opp.but },
-      { name: "Pertes de balle", Nous: stats.byTeam.us.perte, Adversaire: stats.byTeam.opp.perte },
-      { name: "Récupérations", Nous: stats.byTeam.us.recup, Adversaire: stats.byTeam.opp.recup },
-      { name: "Fautes", Nous: stats.byTeam.us.faute_commise, Adversaire: stats.byTeam.opp.faute_commise },
-      { name: "Corners", Nous: stats.byTeam.us.corner, Adversaire: stats.byTeam.opp.corner },
-    ];
-  }, [stats]);
-
   return (
     <div className="app-root">
       <style>{CSS}</style>
@@ -401,8 +382,6 @@ export default function App() {
           setTagPlayer={setTagPlayer}
           exportMatch={exportMatch}
           goHome={() => setScreen("home")}
-          stats={stats}
-          chartData={chartData}
           lastTagFlash={lastTagFlash}
           videoError={videoError}
           setVideoError={setVideoError}
@@ -499,7 +478,7 @@ function TaggingScreen(props) {
     match, videoUrl, videoRef, videoDuration, setVideoDuration, currentTime, setCurrentTime,
     isPlaying, setIsPlaying, playbackRate, setPlaybackRate, activeTeam, setActiveTeam,
     saveStatus, handleFile, togglePlay, seekTo, nudge,
-    addTag, removeTag, setTagPlayer, exportMatch, goHome, chartData, lastTagFlash,
+    addTag, removeTag, setTagPlayer, exportMatch, goHome, lastTagFlash,
     videoError, setVideoError, videoLoading, setVideoLoading,
     pendingPlayerTag, assignPendingPlayer, dismissPendingPlayer, setPossession,
     runCompilation, compilationJob, compilations,
@@ -534,6 +513,8 @@ function TaggingScreen(props) {
     });
     return Array.from(seen.values()).sort((a, b) => b.total - a.total);
   }, [match.tags]);
+  const individualColumnsUs = individualColumns.filter((c) => c.team === "us");
+  const individualColumnsOpp = individualColumns.filter((c) => c.team === "opp");
 
   const individualTimes = useMemo(() => {
     const map = {};
@@ -745,22 +726,6 @@ function TaggingScreen(props) {
         )}
 
         <div className="panel-section">
-          <div className="panel-heading">Tendance du match</div>
-          <div className="chart-wrap">
-            <ResponsiveContainer width="100%" height={220}>
-              <BarChart data={chartData} margin={{ top: 10, right: 10, left: -10, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#26362C" vertical={false} />
-                <XAxis dataKey="name" stroke="#8FA599" fontSize={10} interval={0} angle={-30} textAnchor="end" height={60} />
-                <YAxis stroke="#8FA599" fontSize={10} allowDecimals={false} />
-                <Tooltip contentStyle={{ background: "#182A21", border: "1px solid #26362C", borderRadius: 6, color: "#EEF3EC" }} />
-                <Bar dataKey="Nous" fill="#E3B23C" radius={[3, 3, 0, 0]} />
-                <Bar dataKey="Adversaire" fill="#D6483F" radius={[3, 3, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-
-        <div className="panel-section">
           <div className="panel-heading">Statistiques collectives — Nous vs Adversaire</div>
           <div className="table-scroll">
             <table className="stat-table">
@@ -798,16 +763,16 @@ function TaggingScreen(props) {
           </div>
         </div>
 
-        {individualColumns.length > 0 && (
+        {individualColumnsUs.length > 0 && (
           <div className="panel-section">
-            <div className="panel-heading">Statistiques individuelles</div>
+            <div className="panel-heading">Statistiques individuelles — Nous</div>
             <div className="table-scroll">
               <table className="stat-table">
                 <thead>
                   <tr>
                     <th>Action</th>
-                    {individualColumns.map((col) => (
-                      <th key={`${col.team}_${col.player}`}><span className={`team-dot ${col.team}`} /> n°{col.player}</th>
+                    {individualColumnsUs.map((col) => (
+                      <th key={col.player} className="col-us">n°{col.player}</th>
                     ))}
                   </tr>
                 </thead>
@@ -815,14 +780,54 @@ function TaggingScreen(props) {
                   {ALL_EVENTS.map((ev) => (
                     <tr key={ev.key}>
                       <td>{ev.label}</td>
-                      {individualColumns.map((col) => {
-                        const key = `${ev.key}::${col.team}_${col.player}`;
+                      {individualColumnsUs.map((col) => {
+                        const key = `${ev.key}::us_${col.player}`;
                         return (
                           <td key={key}>
                             <CompileCell
                               times={individualTimes[key] || []}
                               cellKey={key}
-                              label={`${ev.label} — n°${col.player} (${col.team === "us" ? "Nous" : "Adversaire"})`}
+                              label={`${ev.label} — n°${col.player} (Nous)`}
+                              compilationJob={compilationJob}
+                              compilations={compilations}
+                              onRun={runCompilation}
+                            />
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {individualColumnsOpp.length > 0 && (
+          <div className="panel-section">
+            <div className="panel-heading">Statistiques individuelles — Adversaire</div>
+            <div className="table-scroll">
+              <table className="stat-table">
+                <thead>
+                  <tr>
+                    <th>Action</th>
+                    {individualColumnsOpp.map((col) => (
+                      <th key={col.player} className="col-opp">n°{col.player}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {ALL_EVENTS.map((ev) => (
+                    <tr key={ev.key}>
+                      <td>{ev.label}</td>
+                      {individualColumnsOpp.map((col) => {
+                        const key = `${ev.key}::opp_${col.player}`;
+                        return (
+                          <td key={key}>
+                            <CompileCell
+                              times={individualTimes[key] || []}
+                              cellKey={key}
+                              label={`${ev.label} — n°${col.player} (Adversaire)`}
                               compilationJob={compilationJob}
                               compilations={compilations}
                               onRun={runCompilation}
@@ -991,7 +996,7 @@ const CSS = `
   .video-section { min-width: 0; }
   .selectors-col { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
   .selectors-header { display: flex; flex-direction: column; gap: 10px; }
-  .event-categories-stack { display: flex; flex-direction: column; gap: 10px; }
+  .event-categories-stack { display: flex; flex-direction: column; gap: 8px; }
   .compile-progress-float { margin: 10px 18px 0; background: var(--surface); border: 1px solid var(--gold); border-radius: 8px; padding: 8px 12px; }
   .panel-heading { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-muted); font-weight: 700; margin-bottom: 8px; }
   .journal-section { max-width: 640px; }
@@ -1093,13 +1098,13 @@ const CSS = `
   .possession-readout .opp { color: var(--crimson); }
   .possession-readout .neutral { color: var(--ink-muted); }
 
-  .event-category-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-muted); font-weight: 700; margin: 10px 0 6px; }
-  .event-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 5px; }
-  .event-btn { position: relative; text-align: left; background: var(--surface); border: 1px solid var(--line); color: var(--ink); border-radius: 6px; padding: 8px 8px 8px 22px; font-size: 11px; line-height: 1.3; font-weight: 500; transition: border-color 0.12s ease; }
+  .event-category-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-muted); font-weight: 700; margin: 6px 0 5px; }
+  .event-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
+  .event-btn { position: relative; text-align: left; background: var(--surface); border: 1px solid var(--line); color: var(--ink); border-radius: 6px; padding: 6px 6px 6px 20px; font-size: 10px; line-height: 1.25; font-weight: 500; transition: border-color 0.12s ease; }
   .event-btn.pos:hover { border-color: var(--gold); }
   .event-btn.neg:hover { border-color: var(--crimson); }
   .event-btn.disabled { opacity: 0.4; cursor: not-allowed; }
-  .event-hotkey { position: absolute; left: 6px; top: 50%; transform: translateY(-50%); font-size: 9px; color: var(--ink-muted); font-weight: 800; }
+  .event-hotkey { position: absolute; left: 5px; top: 50%; transform: translateY(-50%); font-size: 9px; color: var(--ink-muted); font-weight: 800; }
 
   .compile-progress { background: var(--surface); border: 1px solid var(--gold); border-radius: 8px; padding: 10px 12px; margin-bottom: 12px; }
   .compile-progress-label { font-size: 11px; color: var(--ink); margin-bottom: 6px; }
