@@ -90,6 +90,28 @@ function newId() {
   return (crypto.randomUUID && crypto.randomUUID()) || `id_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
 }
 
+function downloadCSV(filename, rows) {
+  const csvContent = rows
+    .map((row) =>
+      row
+        .map((cell) => {
+          const str = String(cell);
+          return /[,"\n]/.test(str) ? `"${str.replace(/"/g, '""')}"` : str;
+        })
+        .join(",")
+    )
+    .join("\n");
+  const blob = new Blob(["\uFEFF" + csvContent], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
 function readIndex() {
   try {
     const raw = localStorage.getItem(MATCHES_INDEX_KEY);
@@ -485,11 +507,21 @@ function TaggingScreen(props) {
   } = props;
 
   const fileInputRef = useRef(null);
+  const [statsRange, setStatsRange] = useState([0, 0]);
+  useEffect(() => {
+    if (videoDuration > 0 && statsRange[1] === 0) {
+      setStatsRange([0, videoDuration]);
+    }
+  }, [videoDuration]); // eslint-disable-line react-hooks/exhaustive-deps
+  const rangeEnd = statsRange[1] || videoDuration || 0;
+
   const possessionTeam = match.possession && match.possession.length > 0 ? match.possession[match.possession.length - 1].team : null;
   const possDurations = { us: 0, opp: 0, neutral: 0 };
   (match.possession || []).forEach((p) => {
     const end = p.end != null ? p.end : currentTime;
-    possDurations[p.team] += Math.max(0, end - p.start);
+    const clippedStart = Math.max(p.start, statsRange[0]);
+    const clippedEnd = Math.min(end, rangeEnd);
+    possDurations[p.team] += Math.max(0, clippedEnd - clippedStart);
   });
   const possTotal = possDurations.us + possDurations.opp + possDurations.neutral;
   const possPct = (v) => (possTotal > 0 ? Math.round((v / possTotal) * 100) : 0);
@@ -497,22 +529,24 @@ function TaggingScreen(props) {
   const collectiveTimes = useMemo(() => {
     const map = {};
     match.tags.forEach((t) => {
+      if (t.time < statsRange[0] || t.time > rangeEnd) return;
       const key = `${t.eventKey}::${t.team}`;
       (map[key] || (map[key] = [])).push(t.time);
     });
     return map;
-  }, [match.tags]);
+  }, [match.tags, statsRange, rangeEnd]);
 
   const individualColumns = useMemo(() => {
     const seen = new Map();
     match.tags.forEach((t) => {
       if (!t.player) return;
+      if (t.time < statsRange[0] || t.time > rangeEnd) return;
       const key = `${t.team}_${t.player}`;
       if (!seen.has(key)) seen.set(key, { team: t.team, player: t.player, total: 0 });
       seen.get(key).total++;
     });
     return Array.from(seen.values()).sort((a, b) => b.total - a.total);
-  }, [match.tags]);
+  }, [match.tags, statsRange, rangeEnd]);
   const individualColumnsUs = individualColumns.filter((c) => c.team === "us");
   const individualColumnsOpp = individualColumns.filter((c) => c.team === "opp");
 
@@ -520,11 +554,35 @@ function TaggingScreen(props) {
     const map = {};
     match.tags.forEach((t) => {
       if (!t.player) return;
+      if (t.time < statsRange[0] || t.time > rangeEnd) return;
       const key = `${t.eventKey}::${t.team}_${t.player}`;
       (map[key] || (map[key] = [])).push(t.time);
     });
     return map;
-  }, [match.tags]);
+  }, [match.tags, statsRange, rangeEnd]);
+
+  function downloadCollectiveTable() {
+    const rows = [["Action", "Nous", "Adversaire"]];
+    ALL_EVENTS.forEach((ev) => {
+      rows.push([
+        ev.label,
+        (collectiveTimes[`${ev.key}::us`] || []).length,
+        (collectiveTimes[`${ev.key}::opp`] || []).length,
+      ]);
+    });
+    downloadCSV(`${match.name.replace(/\s+/g, "_")}_stats_collectives.csv`, rows);
+  }
+
+  function downloadIndividualTable(columns, teamKey, teamLabel) {
+    const rows = [["Action", ...columns.map((c) => `n°${c.player}`)]];
+    ALL_EVENTS.forEach((ev) => {
+      rows.push([
+        ev.label,
+        ...columns.map((c) => (individualTimes[`${ev.key}::${teamKey}_${c.player}`] || []).length),
+      ]);
+    });
+    downloadCSV(`${match.name.replace(/\s+/g, "_")}_stats_${teamLabel}.csv`, rows);
+  }
 
   return (
     <div className="tagging">
@@ -707,6 +765,40 @@ function TaggingScreen(props) {
           </div>
         </div>
 
+        {videoDuration > 0 && (
+          <div className="panel-section">
+            <div className="range-filter-header">
+              <div className="panel-heading" style={{ marginBottom: 0 }}>Période analysée (possession + tableaux)</div>
+              <div className="range-filter-actions">
+                <button className="range-preset-btn" onClick={() => setStatsRange([0, videoDuration / 2])}>1ère mi-temps</button>
+                <button className="range-preset-btn" onClick={() => setStatsRange([videoDuration / 2, videoDuration])}>2nde mi-temps</button>
+                <button className="range-preset-btn" onClick={() => setStatsRange([0, videoDuration])}>Tout le match</button>
+              </div>
+            </div>
+            <div className="range-filter-values">{formatTime(statsRange[0])} – {formatTime(rangeEnd)}</div>
+            <div className="dual-range">
+              <div
+                className="dual-range-fill"
+                style={{ left: `${(statsRange[0] / videoDuration) * 100}%`, right: `${100 - (rangeEnd / videoDuration) * 100}%` }}
+              />
+              <input
+                type="range"
+                min={0}
+                max={Math.floor(videoDuration)}
+                value={Math.floor(statsRange[0])}
+                onChange={(e) => setStatsRange([Math.min(Number(e.target.value), rangeEnd), rangeEnd])}
+              />
+              <input
+                type="range"
+                min={0}
+                max={Math.floor(videoDuration)}
+                value={Math.floor(rangeEnd)}
+                onChange={(e) => setStatsRange([statsRange[0], Math.max(Number(e.target.value), statsRange[0])])}
+              />
+            </div>
+          </div>
+        )}
+
         {possTotal > 0 && (
           <div className="panel-section">
             <div className="panel-heading">Possession</div>
@@ -726,7 +818,10 @@ function TaggingScreen(props) {
         )}
 
         <div className="panel-section">
-          <div className="panel-heading">Statistiques collectives — Nous vs Adversaire</div>
+          <div className="range-filter-header">
+            <div className="panel-heading" style={{ marginBottom: 0 }}>Statistiques collectives — Nous vs Adversaire</div>
+            <button className="btn btn-ghost btn-small" onClick={downloadCollectiveTable}><Download size={12} /> CSV</button>
+          </div>
           <div className="table-scroll">
             <table className="stat-table">
               <thead>
@@ -765,7 +860,10 @@ function TaggingScreen(props) {
 
         {individualColumnsUs.length > 0 && (
           <div className="panel-section">
-            <div className="panel-heading">Statistiques individuelles — Nous</div>
+            <div className="range-filter-header">
+              <div className="panel-heading" style={{ marginBottom: 0 }}>Statistiques individuelles — Nous</div>
+              <button className="btn btn-ghost btn-small" onClick={() => downloadIndividualTable(individualColumnsUs, "us", "individuelles_nous")}><Download size={12} /> CSV</button>
+            </div>
             <div className="table-scroll">
               <table className="stat-table">
                 <thead>
@@ -805,7 +903,10 @@ function TaggingScreen(props) {
 
         {individualColumnsOpp.length > 0 && (
           <div className="panel-section">
-            <div className="panel-heading">Statistiques individuelles — Adversaire</div>
+            <div className="range-filter-header">
+              <div className="panel-heading" style={{ marginBottom: 0 }}>Statistiques individuelles — Adversaire</div>
+              <button className="btn btn-ghost btn-small" onClick={() => downloadIndividualTable(individualColumnsOpp, "opp", "individuelles_adversaire")}><Download size={12} /> CSV</button>
+            </div>
             <div className="table-scroll">
               <table className="stat-table">
                 <thead>
@@ -1112,6 +1213,19 @@ const CSS = `
   .compile-progress-bar > div { height: 100%; background: var(--gold); transition: width 0.2s ease; }
 
   .table-scroll { overflow-x: auto; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; }
+
+  .range-filter-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+  .range-filter-actions { display: flex; gap: 6px; }
+  .range-preset-btn { background: var(--surface); border: 1px solid var(--line); color: var(--ink-muted); border-radius: 6px; padding: 4px 10px; font-size: 10px; font-weight: 600; }
+  .range-preset-btn:hover { border-color: var(--gold); color: var(--ink); }
+  .range-filter-values { font-size: 12px; font-variant-numeric: tabular-nums; color: var(--gold); font-weight: 700; margin-bottom: 8px; }
+  .dual-range { position: relative; height: 24px; }
+  .dual-range-fill { position: absolute; top: 10px; height: 4px; background: var(--gold); border-radius: 2px; }
+  .dual-range input[type="range"] { position: absolute; top: 0; left: 0; width: 100%; margin: 0; background: transparent; -webkit-appearance: none; pointer-events: none; }
+  .dual-range input[type="range"]::-webkit-slider-runnable-track { height: 4px; background: var(--line); border-radius: 2px; }
+  .dual-range input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; pointer-events: auto; width: 16px; height: 16px; border-radius: 50%; background: var(--gold); border: 2px solid var(--bg); cursor: pointer; margin-top: -6px; }
+  .dual-range input[type="range"]::-moz-range-track { height: 4px; background: var(--line); border-radius: 2px; }
+  .dual-range input[type="range"]::-moz-range-thumb { pointer-events: auto; width: 14px; height: 14px; border-radius: 50%; background: var(--gold); border: 2px solid var(--bg); cursor: pointer; }
   .stat-table { border-collapse: collapse; width: 100%; font-size: 12px; white-space: nowrap; }
   .stat-table th, .stat-table td { padding: 8px 12px; text-align: left; border-bottom: 1px solid var(--line); }
   .stat-table thead th { font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-muted); font-weight: 700; position: sticky; top: 0; background: var(--surface); }
