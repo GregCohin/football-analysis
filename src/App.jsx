@@ -141,6 +141,45 @@ function writeMatch(match) {
   }
 }
 
+function computeRatingSuggestions(match) {
+  const byPlayer = {};
+  match.tags.forEach((t) => {
+    if (!t.player) return;
+    const key = `${t.team}_${t.player}`;
+    if (!byPlayer[key]) byPlayer[key] = { pos: 0, neg: 0, but: 0, rouge: 0, jaune: 0, arret: 0 };
+    const ev = EVENT_MAP[t.eventKey];
+    if (ev.positive) byPlayer[key].pos++; else byPlayer[key].neg++;
+    if (t.eventKey === "but") byPlayer[key].but++;
+    if (t.eventKey === "carton_rouge") byPlayer[key].rouge++;
+    if (t.eventKey === "carton_jaune") byPlayer[key].jaune++;
+    if (t.eventKey === "gardien_arret_ok") byPlayer[key].arret++;
+  });
+
+  const players = {};
+  Object.entries(byPlayer).forEach(([key, d]) => {
+    const total = d.pos + d.neg;
+    const ratio = total > 0 ? d.pos / total : 0.5;
+    let score = 5 + (ratio - 0.5) * 6;
+    score += d.but * 1.2 - d.rouge * 2.5 - d.jaune * 0.6 + d.arret * 0.4;
+    players[key] = Math.max(0, Math.min(10, Math.round(score * 2) / 2));
+  });
+
+  const teamAgg = { us: { pos: 0, neg: 0, but: 0 }, opp: { pos: 0, neg: 0, but: 0 } };
+  match.tags.forEach((t) => {
+    const ev = EVENT_MAP[t.eventKey];
+    if (ev.positive) teamAgg[t.team].pos++; else teamAgg[t.team].neg++;
+    if (t.eventKey === "but") teamAgg[t.team].but++;
+  });
+  const usTotal = teamAgg.us.pos + teamAgg.us.neg;
+  const oppTotal = teamAgg.opp.pos + teamAgg.opp.neg;
+  const usRatio = usTotal > 0 ? teamAgg.us.pos / usTotal : 0.5;
+  const oppRatio = oppTotal > 0 ? teamAgg.opp.pos / oppTotal : 0.5;
+  let teamScore = 5 + (usRatio - oppRatio) * 5 + (teamAgg.us.but - teamAgg.opp.but) * 0.8;
+  teamScore = Math.max(0, Math.min(10, Math.round(teamScore * 2) / 2));
+
+  return { players, team: teamScore };
+}
+
 export default function App() {
   const [screen, setScreen] = useState("home");
   const [matches, setMatches] = useState([]);
@@ -203,6 +242,7 @@ export default function App() {
       date: newMatchForm.date || todayIso(),
       tags: [],
       possession: [],
+      ratings: {},
     };
     writeMatch(match);
     persistIndexUpdate(match);
@@ -218,16 +258,16 @@ export default function App() {
     setCompilations([]);
   }
 
-  function openMatch(summary) {
+  function openMatch(summary, targetScreen) {
     try {
       const raw = localStorage.getItem(matchStorageKey(summary.id));
       const parsed = raw ? JSON.parse(raw) : { ...summary, tags: [] };
-      const match = { ...parsed, tags: parsed.tags || [], possession: parsed.possession || [] };
+      const match = { ...parsed, tags: parsed.tags || [], possession: parsed.possession || [], ratings: parsed.ratings || {} };
       setCurrentMatch(match);
       setVideoUrl(null);
       setVideoDuration(0);
       setCurrentTime(0);
-      setScreen("tagging");
+      setScreen(targetScreen || "tagging");
       setSaveStatus("saved");
       setCompilations([]);
     } catch (e) {
@@ -316,6 +356,17 @@ export default function App() {
     updateMatch((m) => ({ ...m, tags: m.tags.map((t) => (t.id === tagId ? { ...t, player } : t)) }));
   }
 
+  function setTeamRating(score, comment) {
+    updateMatch((m) => ({ ...m, ratings: { ...(m.ratings || {}), team: { score, comment } } }));
+  }
+
+  function setPlayerRating(key, score, comment) {
+    updateMatch((m) => ({
+      ...m,
+      ratings: { ...(m.ratings || {}), players: { ...((m.ratings && m.ratings.players) || {}), [key]: { score, comment } } },
+    }));
+  }
+
   function exportMatch() {
     if (!currentMatch) return;
     const blob = new Blob([JSON.stringify(currentMatch, null, 2)], { type: "application/json" });
@@ -379,6 +430,16 @@ export default function App() {
           deleteMatch={deleteMatch}
         />
       )}
+      {screen === "rating" && currentMatch && (
+        <RatingScreen
+          match={currentMatch}
+          setTeamRating={setTeamRating}
+          setPlayerRating={setPlayerRating}
+          goHome={() => setScreen("home")}
+          goTagging={() => setScreen("tagging")}
+          saveStatus={saveStatus}
+        />
+      )}
       {screen === "tagging" && currentMatch && (
         <TaggingScreen
           match={currentMatch}
@@ -416,6 +477,7 @@ export default function App() {
           runCompilation={runCompilation}
           compilationJob={compilationJob}
           compilations={compilations}
+          goRating={() => setScreen("rating")}
         />
       )}
     </div>
@@ -484,12 +546,108 @@ function HomeScreen({ matches, matchesLoaded, showNewForm, setShowNewForm, newMa
             </div>
             <div className="match-card-side">
               <span className="tag-count">{m.tagCount || 0} actions</span>
+              <button className="btn btn-ghost btn-small" onClick={(e) => { e.stopPropagation(); openMatch(m, "rating"); }}>Noter</button>
               <button className="icon-btn" onClick={(e) => deleteMatch(m, e)} title="Supprimer" aria-label="Supprimer le match">
                 <X size={14} />
               </button>
             </div>
           </div>
         ))}
+      </div>
+    </div>
+  );
+}
+
+function RatingScreen({ match, setTeamRating, setPlayerRating, goHome, goTagging, saveStatus }) {
+  const suggestions = useMemo(() => computeRatingSuggestions(match), [match.tags]);
+
+  const playerList = useMemo(() => {
+    const seen = new Map();
+    match.tags.forEach((t) => {
+      if (!t.player) return;
+      const key = `${t.team}_${t.player}`;
+      if (!seen.has(key)) seen.set(key, { team: t.team, player: t.player, total: 0 });
+      seen.get(key).total++;
+    });
+    return Array.from(seen.values()).sort((a, b) => (a.team !== b.team ? (a.team === "us" ? -1 : 1) : b.total - a.total));
+  }, [match.tags]);
+
+  const teamRating = (match.ratings && match.ratings.team) || null;
+  const teamScore = teamRating ? teamRating.score : suggestions.team;
+
+  return (
+    <div className="tagging">
+      <div className="topbar">
+        <button className="icon-btn" onClick={goHome} aria-label="Retour"><ArrowLeft size={16} /></button>
+        <div className="topbar-title">
+          <div className="topbar-name">{match.name}</div>
+          <div className="topbar-meta">vs {match.opponent}</div>
+        </div>
+        <SaveIndicator status={saveStatus} />
+        <button className="btn btn-ghost btn-small" onClick={goTagging}>Retour au tagging</button>
+      </div>
+
+      <div className="rating-content">
+        <p className="rating-explainer">
+          Les suggestions sont calculées à partir du ratio d'actions positives/négatives de chaque match (buts, cartons et arrêts pèsent davantage) — à ajuster librement selon ton propre regard sur la prestation.
+        </p>
+
+        <div className="rating-card team-rating-card">
+          <div className="rating-card-header">
+            <span className="rating-card-title">Note d'équipe</span>
+            <span className="rating-suggestion">Suggestion : {suggestions.team}/10</span>
+          </div>
+          <div className="rating-input-row">
+            <input
+              type="number" min={0} max={10} step={0.5}
+              value={teamScore}
+              onChange={(e) => setTeamRating(Number(e.target.value), teamRating ? teamRating.comment : "")}
+            />
+            <span>/10</span>
+          </div>
+          <textarea
+            className="rating-comment"
+            placeholder="Commentaire sur la prestation collective..."
+            value={teamRating ? teamRating.comment : ""}
+            onChange={(e) => setTeamRating(teamScore, e.target.value)}
+          />
+        </div>
+
+        <div className="panel-heading">Notation individuelle</div>
+        {playerList.length === 0 && (
+          <div className="empty-state">Aucun joueur associé à une action pour l'instant. Attribue des numéros pendant le tagging pour les voir apparaître ici.</div>
+        )}
+        <div className="player-rating-list">
+          {playerList.map((p) => {
+            const key = `${p.team}_${p.player}`;
+            const rating = (match.ratings && match.ratings.players && match.ratings.players[key]) || null;
+            const suggestion = suggestions.players[key] != null ? suggestions.players[key] : 5;
+            const score = rating ? rating.score : suggestion;
+            return (
+              <div className="rating-card player-rating-card" key={key}>
+                <div className="rating-card-header">
+                  <span className={`team-dot ${p.team}`} />
+                  <span className="rating-card-title">n°{p.player} <span className="rating-card-sub">({p.team === "us" ? "Nous" : "Adversaire"} · {p.total} actions)</span></span>
+                  <span className="rating-suggestion">Suggestion : {suggestion}/10</span>
+                </div>
+                <div className="rating-input-row">
+                  <input
+                    type="number" min={0} max={10} step={0.5}
+                    value={score}
+                    onChange={(e) => setPlayerRating(key, Number(e.target.value), rating ? rating.comment : "")}
+                  />
+                  <span>/10</span>
+                </div>
+                <input
+                  className="rating-comment-inline"
+                  placeholder="Commentaire (optionnel)"
+                  value={rating ? rating.comment : ""}
+                  onChange={(e) => setPlayerRating(key, score, e.target.value)}
+                />
+              </div>
+            );
+          })}
+        </div>
       </div>
     </div>
   );
@@ -503,7 +661,7 @@ function TaggingScreen(props) {
     addTag, removeTag, setTagPlayer, exportMatch, goHome, lastTagFlash,
     videoError, setVideoError, videoLoading, setVideoLoading,
     pendingPlayerTag, assignPendingPlayer, dismissPendingPlayer, setPossession,
-    runCompilation, compilationJob, compilations,
+    runCompilation, compilationJob, compilations, goRating,
   } = props;
 
   const fileInputRef = useRef(null);
@@ -593,6 +751,7 @@ function TaggingScreen(props) {
           <div className="topbar-meta">vs {match.opponent}</div>
         </div>
         <SaveIndicator status={saveStatus} />
+        <button className="btn btn-ghost btn-small" onClick={goRating}>Noter le match</button>
         <button className="btn btn-ghost btn-small" onClick={exportMatch}><Download size={13} /> Exporter</button>
       </div>
 
@@ -1241,4 +1400,19 @@ const CSS = `
   .compile-icon.ready { border-color: var(--gold); color: var(--gold); }
   .compile-icon:disabled { opacity: 0.35; cursor: not-allowed; }
   .compile-icon.spinning { font-size: 13px; border-style: dashed; }
+
+  .rating-content { max-width: 760px; margin: 0 auto; padding: 24px 18px 40px; }
+  .rating-explainer { font-size: 12px; color: var(--ink-muted); line-height: 1.6; margin: 0 0 20px; }
+  .rating-card { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 16px; margin-bottom: 12px; }
+  .team-rating-card { border-color: var(--gold); }
+  .rating-card-header { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+  .rating-card-title { font-weight: 700; font-size: 14px; flex: 1; }
+  .rating-card-sub { font-weight: 400; color: var(--ink-muted); font-size: 12px; }
+  .rating-suggestion { font-size: 11px; color: var(--ink-muted); white-space: nowrap; }
+  .rating-input-row { display: flex; align-items: center; gap: 6px; margin-bottom: 10px; }
+  .rating-input-row input[type="number"] { width: 64px; background: var(--bg); border: 1px solid var(--line); color: var(--gold); font-weight: 800; font-size: 18px; text-align: center; border-radius: 6px; padding: 6px; }
+  .rating-input-row span { color: var(--ink-muted); font-size: 13px; }
+  .rating-comment { width: 100%; min-height: 60px; background: var(--bg); border: 1px solid var(--line); color: var(--ink); border-radius: 6px; padding: 8px 10px; font-size: 12px; font-family: inherit; resize: vertical; }
+  .rating-comment-inline { width: 100%; background: var(--bg); border: 1px solid var(--line); color: var(--ink); border-radius: 6px; padding: 6px 10px; font-size: 12px; font-family: inherit; }
+  .player-rating-list { display: flex; flex-direction: column; gap: 10px; }
 `;
