@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from "recharts";
 import { Play, Pause, ArrowLeft, X, Download, Video as VideoIcon, Film } from "lucide-react";
 import { generateCompilation } from "./videoCompiler";
 
@@ -198,6 +199,7 @@ function computeRatingSuggestions(match) {
 
 export default function App() {
   const [screen, setScreen] = useState("home");
+  const [section, setSection] = useState("studio");
   const [matches, setMatches] = useState([]);
   const [matchesLoaded, setMatchesLoaded] = useState(false);
   const [currentMatch, setCurrentMatch] = useState(null);
@@ -436,52 +438,61 @@ export default function App() {
   return (
     <div className="app-root">
       <style>{CSS}</style>
-      {screen === "home" && (
-        <HomeScreen
-          matches={matches}
-          matchesLoaded={matchesLoaded}
-          showNewForm={showNewForm}
-          setShowNewForm={setShowNewForm}
-          newMatchForm={newMatchForm}
-          setNewMatchForm={setNewMatchForm}
-          createMatch={createMatch}
-          openMatch={openMatch}
-          deleteMatch={deleteMatch}
-        />
-      )}
-      {screen === "rating" && currentMatch && (
-        <RatingScreen
-          match={currentMatch}
-          setTeamRating={setTeamRating}
-          setPlayerRating={setPlayerRating}
-          goHome={() => setScreen("home")}
-          goTagging={() => setScreen("tagging")}
-          saveStatus={saveStatus}
-        />
-      )}
-      {screen === "tagging" && currentMatch && (
-        <TaggingScreen
-          match={currentMatch}
-          videoUrl={videoUrl}
-          videoRef={videoRef}
-          videoDuration={videoDuration}
-          setVideoDuration={setVideoDuration}
-          currentTime={currentTime}
-          setCurrentTime={setCurrentTime}
-          isPlaying={isPlaying}
-          setIsPlaying={setIsPlaying}
-          playbackRate={playbackRate}
-          setPlaybackRate={setPlaybackRate}
-          activeTeam={activeTeam}
-          setActiveTeam={setActiveTeam}
-          saveStatus={saveStatus}
-          handleFile={handleFile}
-          togglePlay={togglePlay}
-          seekTo={seekTo}
-          nudge={nudge}
-          addTag={addTag}
-          removeTag={removeTag}
-          setTagPlayer={setTagPlayer}
+      <div className="section-nav">
+        <button className={`section-tab ${section === "studio" ? "active" : ""}`} onClick={() => setSection("studio")}>Studio</button>
+        <button className={`section-tab ${section === "stats" ? "active" : ""}`} onClick={() => setSection("stats")}>Statistiques</button>
+      </div>
+
+      {section === "stats" && <StatsScreen matches={matches} />}
+
+      {section === "studio" && (
+        <>
+          {screen === "home" && (
+            <HomeScreen
+              matches={matches}
+              matchesLoaded={matchesLoaded}
+              showNewForm={showNewForm}
+              setShowNewForm={setShowNewForm}
+              newMatchForm={newMatchForm}
+              setNewMatchForm={setNewMatchForm}
+              createMatch={createMatch}
+              openMatch={openMatch}
+              deleteMatch={deleteMatch}
+            />
+          )}
+          {screen === "rating" && currentMatch && (
+            <RatingScreen
+              match={currentMatch}
+              setTeamRating={setTeamRating}
+              setPlayerRating={setPlayerRating}
+              goHome={() => setScreen("home")}
+              goTagging={() => setScreen("tagging")}
+              saveStatus={saveStatus}
+            />
+          )}
+          {screen === "tagging" && currentMatch && (
+            <TaggingScreen
+              match={currentMatch}
+              videoUrl={videoUrl}
+              videoRef={videoRef}
+              videoDuration={videoDuration}
+              setVideoDuration={setVideoDuration}
+              currentTime={currentTime}
+              setCurrentTime={setCurrentTime}
+              isPlaying={isPlaying}
+              setIsPlaying={setIsPlaying}
+              playbackRate={playbackRate}
+              setPlaybackRate={setPlaybackRate}
+              activeTeam={activeTeam}
+              setActiveTeam={setActiveTeam}
+              saveStatus={saveStatus}
+              handleFile={handleFile}
+              togglePlay={togglePlay}
+              seekTo={seekTo}
+              nudge={nudge}
+              addTag={addTag}
+              removeTag={removeTag}
+              setTagPlayer={setTagPlayer}
           exportMatch={exportMatch}
           goHome={() => setScreen("home")}
           lastTagFlash={lastTagFlash}
@@ -498,6 +509,8 @@ export default function App() {
           compilations={compilations}
           goRating={() => setScreen("rating")}
         />
+      )}
+        </>
       )}
     </div>
   );
@@ -573,6 +586,205 @@ function HomeScreen({ matches, matchesLoaded, showNewForm, setShowNewForm, newMa
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+function summarizeMatchForStats(match) {
+  const suggestions = computeRatingSuggestions(match);
+  const goals = { us: 0, opp: 0 };
+  match.tags.forEach((t) => { if (t.eventKey === "but") goals[t.team]++; });
+
+  let possUs = null;
+  if (match.possession && match.possession.length > 0) {
+    const dur = { us: 0, opp: 0, neutral: 0 };
+    match.possession.forEach((p) => {
+      const end = p.end != null ? p.end : p.start;
+      dur[p.team] += Math.max(0, end - p.start);
+    });
+    const total = dur.us + dur.opp + dur.neutral;
+    possUs = total > 0 ? Math.round((dur.us / total) * 100) : null;
+  }
+
+  const teamRatings = (match.ratings && match.ratings.team) || {};
+  return {
+    id: match.id,
+    name: match.name,
+    opponent: match.opponent,
+    date: match.date,
+    goalsUs: goals.us,
+    goalsOpp: goals.opp,
+    possUs,
+    teamSuggestUs: suggestions.team.us,
+    teamAvgUs: suggestions.teamPlayerAvg.us,
+    teamCoachUs: teamRatings.us && teamRatings.us.coachScore != null ? teamRatings.us.coachScore : null,
+    tagCount: match.tags.length,
+  };
+}
+
+function getAllPlayersEver(allMatches) {
+  const seen = new Map();
+  allMatches.forEach((match) => {
+    const inThisMatch = new Set();
+    match.tags.forEach((t) => { if (t.player) inThisMatch.add(`${t.team}_${t.player}`); });
+    inThisMatch.forEach((key) => {
+      if (!seen.has(key)) {
+        const idx = key.indexOf("_");
+        seen.set(key, { team: key.slice(0, idx), player: key.slice(idx + 1), matchCount: 0 });
+      }
+      seen.get(key).matchCount++;
+    });
+  });
+  return Array.from(seen.values()).sort((a, b) => b.matchCount - a.matchCount);
+}
+
+function getPlayerHistory(allMatches, team, player) {
+  const key = `${team}_${player}`;
+  return allMatches
+    .map((match) => {
+      const tagsForPlayer = match.tags.filter((t) => t.team === team && t.player === player);
+      const rating = match.ratings && match.ratings.players && match.ratings.players[key];
+      if (tagsForPlayer.length === 0 && !rating) return null;
+      const suggestions = computeRatingSuggestions(match);
+      return {
+        matchId: match.id,
+        matchName: match.name,
+        date: match.date,
+        actions: tagsForPlayer.length,
+        suggestion: tagsForPlayer.length > 0 ? suggestions.players[key] : null,
+        coachScore: rating && rating.coachScore != null ? rating.coachScore : null,
+        comment: rating ? rating.comment : "",
+      };
+    })
+    .filter(Boolean);
+}
+
+function StatsScreen({ matches }) {
+  const [allFullMatches, setAllFullMatches] = useState([]);
+  const [loaded, setLoaded] = useState(false);
+  const [selectedPlayerKey, setSelectedPlayerKey] = useState("");
+
+  useEffect(() => {
+    const full = matches
+      .map((m) => {
+        try {
+          const raw = localStorage.getItem(matchStorageKey(m.id));
+          return raw ? JSON.parse(raw) : null;
+        } catch (e) {
+          return null;
+        }
+      })
+      .filter(Boolean)
+      .sort((a, b) => new Date(a.date) - new Date(b.date));
+    setAllFullMatches(full);
+    setLoaded(true);
+  }, [matches]);
+
+  const matchSummaries = useMemo(() => allFullMatches.map(summarizeMatchForStats), [allFullMatches]);
+  const allPlayers = useMemo(() => getAllPlayersEver(allFullMatches), [allFullMatches]);
+  const [selTeam, selPlayer] = selectedPlayerKey ? [selectedPlayerKey.slice(0, selectedPlayerKey.indexOf("_")), selectedPlayerKey.slice(selectedPlayerKey.indexOf("_") + 1)] : [null, null];
+  const playerHistory = useMemo(
+    () => (selTeam ? getPlayerHistory(allFullMatches, selTeam, selPlayer) : []),
+    [allFullMatches, selTeam, selPlayer]
+  );
+
+  return (
+    <div className="stats-screen">
+      <div className="stats-screen-header">
+        <div className="eyebrow">Assistant coaching</div>
+        <h1>Statistiques</h1>
+        <p className="subtitle">L'évolution de l'équipe et de chaque joueur à travers tous les matchs tagués.</p>
+      </div>
+
+      {!loaded && <div className="empty-state">Chargement…</div>}
+      {loaded && matchSummaries.length === 0 && (
+        <div className="empty-state">Aucun match tagué pour l'instant — reviens ici une fois quelques matchs analysés dans Studio.</div>
+      )}
+
+      {matchSummaries.length > 0 && (
+        <>
+          <div className="panel-heading">Évolution de l'équipe (Nous)</div>
+          <div className="chart-wrap">
+            <ResponsiveContainer width="100%" height={260}>
+              <LineChart data={matchSummaries} margin={{ top: 10, right: 20, left: -10, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#26362C" />
+                <XAxis dataKey="name" stroke="#8FA599" fontSize={10} />
+                <YAxis domain={[0, 10]} stroke="#8FA599" fontSize={10} allowDecimals={false} />
+                <Tooltip contentStyle={{ background: "#182A21", border: "1px solid #26362C", borderRadius: 6, color: "#EEF3EC" }} />
+                <Legend wrapperStyle={{ fontSize: 11 }} />
+                <Line type="monotone" dataKey="teamSuggestUs" name="Suggestion" stroke="#E3B23C" strokeWidth={2} dot={{ r: 3 }} connectNulls />
+                <Line type="monotone" dataKey="teamAvgUs" name="Moyenne joueurs" stroke="#8FA599" strokeWidth={2} dot={{ r: 3 }} connectNulls />
+                <Line type="monotone" dataKey="teamCoachUs" name="Note du coach" stroke="#D6483F" strokeWidth={2} dot={{ r: 3 }} connectNulls />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+
+          <div className="table-scroll">
+            <table className="stat-table">
+              <thead>
+                <tr><th>Match</th><th>Date</th><th>Score</th><th>Possession</th><th>Suggestion</th><th>Moy. joueurs</th><th>Note coach</th></tr>
+              </thead>
+              <tbody>
+                {matchSummaries.map((s) => (
+                  <tr key={s.id}>
+                    <td>{s.name}</td>
+                    <td>{formatDateFr(s.date)}</td>
+                    <td>{s.goalsUs} - {s.goalsOpp}</td>
+                    <td>{s.possUs != null ? `${s.possUs}%` : "—"}</td>
+                    <td>{s.teamSuggestUs}/10</td>
+                    <td>{s.teamAvgUs != null ? `${s.teamAvgUs}/10` : "—"}</td>
+                    <td>{s.teamCoachUs != null ? `${s.teamCoachUs}/10` : "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="panel-heading">Évolution par joueur</div>
+          <select className="player-select" value={selectedPlayerKey} onChange={(e) => setSelectedPlayerKey(e.target.value)}>
+            <option value="">Choisir un joueur…</option>
+            {allPlayers.map((p) => (
+              <option key={`${p.team}_${p.player}`} value={`${p.team}_${p.player}`}>
+                n°{p.player} ({p.team === "us" ? "Nous" : "Adversaire"}) — {p.matchCount} match{p.matchCount > 1 ? "s" : ""}
+              </option>
+            ))}
+          </select>
+
+          {selectedPlayerKey && playerHistory.length > 0 && (
+            <>
+              <div className="chart-wrap" style={{ marginTop: 14 }}>
+                <ResponsiveContainer width="100%" height={220}>
+                  <LineChart data={playerHistory} margin={{ top: 10, right: 20, left: -10, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#26362C" />
+                    <XAxis dataKey="matchName" stroke="#8FA599" fontSize={10} />
+                    <YAxis domain={[0, 10]} stroke="#8FA599" fontSize={10} allowDecimals={false} />
+                    <Tooltip contentStyle={{ background: "#182A21", border: "1px solid #26362C", borderRadius: 6, color: "#EEF3EC" }} />
+                    <Legend wrapperStyle={{ fontSize: 11 }} />
+                    <Line type="monotone" dataKey="suggestion" name="Suggestion" stroke="#E3B23C" strokeWidth={2} dot={{ r: 3 }} connectNulls />
+                    <Line type="monotone" dataKey="coachScore" name="Note du coach" stroke="#D6483F" strokeWidth={2} dot={{ r: 3 }} connectNulls />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+              <div className="table-scroll" style={{ marginTop: 12 }}>
+                <table className="stat-table">
+                  <thead><tr><th>Match</th><th>Date</th><th>Actions</th><th>Suggestion</th><th>Note coach</th></tr></thead>
+                  <tbody>
+                    {playerHistory.map((h) => (
+                      <tr key={h.matchId}>
+                        <td>{h.matchName}</td>
+                        <td>{formatDateFr(h.date)}</td>
+                        <td>{h.actions}</td>
+                        <td>{h.suggestion != null ? `${h.suggestion}/10` : "—"}</td>
+                        <td>{h.coachScore != null ? `${h.coachScore}/10` : "—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
+        </>
+      )}
     </div>
   );
 }
@@ -1312,6 +1524,13 @@ const CSS = `
   .app-root input, .app-root select { font-family: inherit; }
   .app-root button:focus-visible, .app-root input:focus-visible, .app-root select:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
   @media (prefers-reduced-motion: reduce) { .app-root * { transition: none !important; animation: none !important; } }
+
+  .section-nav { display: flex; gap: 4px; padding: 12px 18px 0; border-bottom: 1px solid var(--line); }
+  .section-tab { background: transparent; border: none; color: var(--ink-muted); font-size: 13px; font-weight: 700; padding: 10px 16px; border-bottom: 2px solid transparent; }
+  .section-tab.active { color: var(--gold); border-bottom-color: var(--gold); }
+  .stats-screen { padding: 24px 24px 48px; max-width: 1000px; margin: 0 auto; }
+  .stats-screen-header { margin-bottom: 20px; }
+  .player-select { width: 100%; max-width: 420px; background: var(--surface); border: 1px solid var(--line); color: var(--ink); border-radius: 6px; padding: 8px 10px; font-size: 12px; margin-bottom: 8px; }
 
   .home { padding: 32px 28px 40px; max-width: 720px; margin: 0 auto; }
   .home-header { margin-bottom: 24px; }
