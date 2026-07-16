@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, ReferenceLine } from "recharts";
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, ReferenceLine, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar } from "recharts";
 import { Play, Pause, ArrowLeft, X, Download, Video as VideoIcon, Film, Menu, Home, Target, Users, Trophy, BarChart, ClipboardList, FileText, Eye, Search, Activity } from "lucide-react";
 import { generateCompilation } from "./videoCompiler";
 
@@ -789,6 +789,101 @@ function rowMax(values) {
   return values.reduce((m, v) => (v > m ? v : m), 0);
 }
 
+const RADAR_AXES = [
+  { key: "passes", label: "Passes", events: ["passe_ok", "passe_ko", "centre_ok", "centre_ko"] },
+  { key: "technique", label: "Technique", events: ["controle_ok", "controle_ko", "dribble_ok", "dribble_ko"] },
+  { key: "finition", label: "Finition", events: ["tir_cadre", "tir_hc", "but"] },
+  { key: "defense", label: "Défense", events: ["recup", "tacle_ok", "tacle_ko", "interception", "degagement", "duel_ok", "duel_ko"] },
+  { key: "discipline", label: "Discipline", events: ["faute_commise", "faute_subie", "carton_jaune", "carton_rouge", "hors_jeu"] },
+];
+
+const GK_RADAR_AXES = [
+  { key: "arrets", label: "Arrêts", events: ["gardien_arret_ok", "gardien_arret_ko"] },
+  { key: "sorties", label: "Sorties", events: ["gardien_sortie_ok", "gardien_sortie_ko"] },
+  { key: "relances", label: "Relances", events: ["gardien_relance_ok", "gardien_relance_ko"] },
+  { key: "duelsgk", label: "Duels", events: ["gardien_duel_ok", "gardien_duel_ko"] },
+];
+
+function computeRadarValues(tags, axes) {
+  return axes.map((axis) => {
+    let pos = 0, total = 0;
+    tags.forEach((t) => {
+      if (!axis.events.includes(t.eventKey)) return;
+      total++;
+      if (EVENT_MAP[t.eventKey].positive) pos++;
+    });
+    return { axis: axis.label, value: total > 0 ? Math.round((pos / total) * 100) : 0, hasData: total > 0 };
+  });
+}
+
+function gatherPlayerTags(allMatches, team, player, last5Only) {
+  const matchesWithPlayer = allMatches.filter((m) => m.tags.some((t) => t.team === team && t.player === player));
+  const scope = last5Only ? matchesWithPlayer.slice(-5) : matchesWithPlayer;
+  return scope.flatMap((m) => m.tags.filter((t) => t.team === team && t.player === player));
+}
+
+function gatherTeamTags(allMatches, team, last5Only) {
+  const scope = last5Only ? allMatches.slice(-5) : allMatches;
+  return scope.flatMap((m) => m.tags.filter((t) => t.team === team));
+}
+
+function isGoalkeeper(allMatches, team, player) {
+  return allMatches.some((m) => m.tags.some((t) => t.team === team && t.player === player && t.eventKey.startsWith("gardien_")));
+}
+
+function detectTrend(series) {
+  const vals = series.filter((v) => v.value != null);
+  if (vals.length < 3) return null;
+  const [a, b, c] = vals.slice(-3);
+  if (a.value < b.value && b.value < c.value) return "hausse";
+  if (a.value > b.value && b.value > c.value) return "baisse";
+  return null;
+}
+
+function detectSustainedDeviation(series) {
+  const vals = series.filter((v) => v.value != null);
+  if (vals.length < 4) return null;
+  const avg = vals.reduce((a, v) => a + v.value, 0) / vals.length;
+  const last3 = vals.slice(-3);
+  if (last3.every((v) => v.value < avg)) return { direction: "sous", avg: Math.round(avg * 10) / 10 };
+  if (last3.every((v) => v.value > avg)) return { direction: "au-dessus de", avg: Math.round(avg * 10) / 10 };
+  return null;
+}
+
+function detectRecord(series) {
+  const vals = series.filter((v) => v.value != null);
+  if (vals.length < 2) return null;
+  const last = vals[vals.length - 1];
+  const prevVals = vals.slice(0, -1).map((v) => v.value);
+  if (last.value > Math.max(...prevVals)) return { type: "meilleur", value: last.value };
+  if (last.value < Math.min(...prevVals)) return { type: "pire", value: last.value };
+  return null;
+}
+
+function signalsForSeries(series, scope, metricLabel) {
+  const out = [];
+  const trend = detectTrend(series);
+  if (trend) out.push({ scope, positive: trend === "hausse", text: `${metricLabel} en ${trend} depuis 3 matchs` });
+  const dev = detectSustainedDeviation(series);
+  if (dev) out.push({ scope, positive: dev.direction === "au-dessus de", text: `${metricLabel} ${dev.direction} la moyenne perso (${dev.avg}/10) depuis 3 matchs` });
+  const rec = detectRecord(series);
+  if (rec) out.push({ scope, positive: rec.type === "meilleur", text: `${rec.type === "meilleur" ? "Meilleur" : "Pire"} score jamais enregistré pour ${metricLabel.toLowerCase()} (${rec.value}/10)` });
+  return out;
+}
+
+function generateAllSignals(matchSummaries, allFullMatches, allPlayers) {
+  const signals = [];
+  signals.push(...signalsForSeries(matchSummaries.map((m) => ({ value: m.teamSuggestUs })), "Équipe", "Suggestion"));
+  signals.push(...signalsForSeries(matchSummaries.map((m) => ({ value: m.teamCoachUs })), "Équipe", "Note du coach"));
+  allPlayers.forEach((p) => {
+    const hist = getPlayerHistory(allFullMatches, p.team, p.player);
+    const label = `n°${p.player} (${p.team === "us" ? "Nous" : "Adversaire"})`;
+    signals.push(...signalsForSeries(hist.map((h) => ({ value: h.suggestion })), label, "Suggestion"));
+    signals.push(...signalsForSeries(hist.map((h) => ({ value: h.coachScore })), label, "Note du coach"));
+  });
+  return signals;
+}
+
 function StatsScreen({ matches }) {
   const [allFullMatches, setAllFullMatches] = useState([]);
   const [loaded, setLoaded] = useState(false);
@@ -796,6 +891,8 @@ function StatsScreen({ matches }) {
   const [statsSubTab, setStatsSubTab] = useState("collectif");
   const [compareMatchIds, setCompareMatchIds] = useState([]);
   const [comparePlayerKeys, setComparePlayerKeys] = useState([]);
+  const [radarRange, setRadarRange] = useState("all");
+  const [radarCompareWith, setRadarCompareWith] = useState("");
 
   useEffect(() => {
     const full = matches
@@ -831,6 +928,48 @@ function StatsScreen({ matches }) {
     const avg = (arr) => (arr.length > 0 ? Math.round((arr.reduce((a, b) => a + b, 0) / arr.length) * 10) / 10 : null);
     return { suggestion: avg(sugg), coachScore: avg(coach) };
   }, [playerHistory]);
+
+  const selectedIsGoalkeeper = selTeam ? isGoalkeeper(allFullMatches, selTeam, selPlayer) : false;
+  const radarAxesUsed = selectedIsGoalkeeper ? GK_RADAR_AXES : RADAR_AXES;
+  const radarMainValues = useMemo(() => {
+    if (!selTeam) return null;
+    const tags = gatherPlayerTags(allFullMatches, selTeam, selPlayer, radarRange === "last5");
+    return computeRadarValues(tags, radarAxesUsed);
+  }, [allFullMatches, selTeam, selPlayer, radarRange, selectedIsGoalkeeper]);
+
+  const radarCompareValues = useMemo(() => {
+    if (!radarCompareWith || !selTeam) return null;
+    if (radarCompareWith === "team_us" || radarCompareWith === "team_opp") {
+      const team = radarCompareWith === "team_us" ? "us" : "opp";
+      const tags = gatherTeamTags(allFullMatches, team, radarRange === "last5");
+      return computeRadarValues(tags, radarAxesUsed);
+    }
+    const idx = radarCompareWith.indexOf("_");
+    const cTeam = radarCompareWith.slice(0, idx);
+    const cPlayer = radarCompareWith.slice(idx + 1);
+    const tags = gatherPlayerTags(allFullMatches, cTeam, cPlayer, radarRange === "last5");
+    return computeRadarValues(tags, radarAxesUsed);
+  }, [allFullMatches, radarCompareWith, radarRange, radarAxesUsed, selTeam]);
+
+  const radarChartData = useMemo(() => {
+    if (!radarMainValues) return [];
+    return radarAxesUsed.map((axis, i) => ({
+      axis: axis.label,
+      main: radarMainValues[i].value,
+      compare: radarCompareValues ? radarCompareValues[i].value : undefined,
+    }));
+  }, [radarMainValues, radarCompareValues, radarAxesUsed]);
+
+  const allSignals = useMemo(
+    () => generateAllSignals(matchSummaries, allFullMatches, allPlayers),
+    [matchSummaries, allFullMatches, allPlayers]
+  );
+  const teamSignals = useMemo(() => allSignals.filter((s) => s.scope === "Équipe"), [allSignals]);
+  const currentPlayerLabel = selTeam ? `n°${selPlayer} (${selTeam === "us" ? "Nous" : "Adversaire"})` : null;
+  const currentPlayerSignals = useMemo(
+    () => (currentPlayerLabel ? allSignals.filter((s) => s.scope === currentPlayerLabel) : []),
+    [allSignals, currentPlayerLabel]
+  );
 
   function toggleMatchCompare(id) {
     setCompareMatchIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
@@ -901,6 +1040,7 @@ function StatsScreen({ matches }) {
           <button className={`tab ${statsSubTab === "individuel" ? "active" : ""}`} onClick={() => setStatsSubTab("individuel")}>Individuel</button>
           <button className={`tab ${statsSubTab === "comparematch" ? "active" : ""}`} onClick={() => setStatsSubTab("comparematch")}>Comparaison match</button>
           <button className={`tab ${statsSubTab === "compareplayer" ? "active" : ""}`} onClick={() => setStatsSubTab("compareplayer")}>Comparaison joueur</button>
+          <button className={`tab ${statsSubTab === "signaux" ? "active" : ""}`} onClick={() => setStatsSubTab("signaux")}>Signaux{allSignals.length > 0 ? ` (${allSignals.length})` : ""}</button>
         </div>
       )}
 
@@ -911,6 +1051,14 @@ function StatsScreen({ matches }) {
 
       {matchSummaries.length > 0 && statsSubTab === "collectif" && (
         <>
+          {teamSignals.length > 0 && (
+            <div className="signals-box">
+              <div className="signals-box-title">Signaux — Équipe</div>
+              {teamSignals.map((s, i) => (
+                <div key={i} className={`signal-item ${s.positive ? "positive" : "negative"}`}>{s.text}</div>
+              ))}
+            </div>
+          )}
           <div className="panel-heading">Évolution de l'équipe (Nous)</div>
           <div className="chart-wrap">
             <ResponsiveContainer width="100%" height={260}>
@@ -992,6 +1140,15 @@ function StatsScreen({ matches }) {
             ))}
           </select>
 
+          {currentPlayerSignals.length > 0 && (
+            <div className="signals-box">
+              <div className="signals-box-title">Signaux — {currentPlayerLabel}</div>
+              {currentPlayerSignals.map((s, i) => (
+                <div key={i} className={`signal-item ${s.positive ? "positive" : "negative"}`}>{s.text}</div>
+              ))}
+            </div>
+          )}
+
           {selectedPlayerKey && playerHistory.length > 0 && (
             <>
               <div className="panel-heading" style={{ marginTop: 16 }}>Évolution du joueur</div>
@@ -1036,6 +1193,52 @@ function StatsScreen({ matches }) {
                   </tbody>
                 </table>
               </div>
+            </>
+          )}
+
+          {selectedPlayerKey && radarMainValues && (
+            <>
+              <div className="range-filter-header" style={{ marginTop: 20 }}>
+                <div className="panel-heading" style={{ marginBottom: 0 }}>
+                  Profil radar{selectedIsGoalkeeper ? " — Gardien" : ""}
+                </div>
+                <div className="range-filter-actions">
+                  <button className={`range-preset-btn ${radarRange === "last5" ? "active-preset" : ""}`} onClick={() => setRadarRange("last5")}>5 derniers</button>
+                  <button className={`range-preset-btn ${radarRange === "all" ? "active-preset" : ""}`} onClick={() => setRadarRange("all")}>Ensemble</button>
+                </div>
+              </div>
+              <select className="player-select" value={radarCompareWith} onChange={(e) => setRadarCompareWith(e.target.value)}>
+                <option value="">Comparer avec… (optionnel)</option>
+                <option value="team_us">Moyenne de l'équipe (Nous)</option>
+                <option value="team_opp">Moyenne de l'équipe (Adversaire)</option>
+                {allPlayers.filter((p) => `${p.team}_${p.player}` !== selectedPlayerKey).map((p) => (
+                  <option key={`${p.team}_${p.player}`} value={`${p.team}_${p.player}`}>
+                    n°{p.player} ({p.team === "us" ? "Nous" : "Adversaire"})
+                  </option>
+                ))}
+              </select>
+              <div className="chart-wrap">
+                <ResponsiveContainer width="100%" height={320}>
+                  <RadarChart data={radarChartData} outerRadius="70%">
+                    <PolarGrid stroke="#26362C" />
+                    <PolarAngleAxis dataKey="axis" tick={{ fill: "#8FA599", fontSize: 11 }} />
+                    <PolarRadiusAxis domain={[0, 100]} tick={{ fill: "#8FA599", fontSize: 9 }} />
+                    <Tooltip contentStyle={{ background: "#182A21", border: "1px solid #26362C", borderRadius: 6, color: "#EEF3EC" }} />
+                    <Legend wrapperStyle={{ fontSize: 11 }} />
+                    <Radar name={currentPlayerLabel} dataKey="main" stroke="#E3B23C" fill="#E3B23C" fillOpacity={0.35} />
+                    {radarCompareValues && (
+                      <Radar
+                        name={radarCompareWith === "team_us" ? "Nous (moyenne)" : radarCompareWith === "team_opp" ? "Adversaire (moyenne)" : `n°${radarCompareWith.slice(radarCompareWith.indexOf("_") + 1)}`}
+                        dataKey="compare"
+                        stroke="#D6483F"
+                        fill="#D6483F"
+                        fillOpacity={0.2}
+                      />
+                    )}
+                  </RadarChart>
+                </ResponsiveContainer>
+              </div>
+              <p className="radar-note">Chaque axe est le taux de réussite (0-100%) des actions liées, sur la période choisie. Un axe à 0 sans repère signifie qu'aucune action de ce type n'a encore été taguée.</p>
             </>
           )}
 
@@ -1182,6 +1385,24 @@ function StatsScreen({ matches }) {
                 </table>
               </div>
             </>
+          )}
+        </>
+      )}
+
+      {matchSummaries.length > 0 && statsSubTab === "signaux" && (
+        <>
+          <div className="panel-heading">Tous les signaux détectés</div>
+          {allSignals.length === 0 && (
+            <div className="empty-state">Rien à signaler pour l'instant — les signaux apparaissent à partir de 3-4 matchs clôturés pour une même équipe ou un même joueur.</div>
+          )}
+          {allSignals.length > 0 && (
+            <div className="signals-box signals-box-full">
+              {allSignals.map((s, i) => (
+                <div key={i} className={`signal-item ${s.positive ? "positive" : "negative"}`}>
+                  <span className="signal-scope">{s.scope}</span> — {s.text}
+                </div>
+              ))}
+            </div>
           )}
         </>
       )}
@@ -1960,6 +2181,15 @@ const CSS = `
   .comparison-summary-card div { font-size: 11px; color: var(--ink-muted); margin-bottom: 2px; }
   .player-avg-summary { display: flex; gap: 18px; flex-wrap: wrap; font-size: 12px; color: var(--ink-muted); margin-bottom: 10px; }
   .player-avg-summary strong { color: var(--ink); }
+  .signals-box { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; margin-bottom: 16px; display: flex; flex-direction: column; gap: 6px; }
+  .signals-box-title { font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--ink-muted); font-weight: 700; margin-bottom: 2px; }
+  .signal-item { font-size: 12px; padding: 6px 10px; border-radius: 6px; background: var(--bg); border-left: 3px solid var(--ink-muted); }
+  .signal-item.positive { border-left-color: var(--gold); color: var(--ink); }
+  .signal-item.negative { border-left-color: var(--crimson); color: var(--ink); }
+  .signal-scope { font-weight: 700; }
+  .signals-box-full { margin-bottom: 0; }
+  .range-preset-btn.active-preset { background: var(--gold); color: var(--gold-ink); border-color: var(--gold); }
+  .radar-note { font-size: 11px; color: var(--ink-muted); line-height: 1.5; margin-top: 8px; max-width: 560px; }
   .placeholder-screen { max-width: 560px; margin: 80px auto; padding: 0 24px; text-align: center; }
   .placeholder-screen h1 { font-size: 26px; font-weight: 800; margin: 0 0 10px; }
   .placeholder-badge { display: inline-block; margin-top: 16px; background: var(--surface); border: 1px solid var(--line); color: var(--ink-muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 700; padding: 6px 14px; border-radius: 20px; }
