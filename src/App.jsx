@@ -669,7 +669,7 @@ function PlayerAssignmentEditor({ roster, assignments, setAssignments }) {
       <div className="assignment-list">
         {roster.map((p) => (
           <div className="assignment-row" key={p.id}>
-            <span className="assignment-name">{p.name} <span className="assignment-position">({p.position})</span></span>
+            <span className="assignment-name">{playerFullName(p)} <span className="assignment-position">({p.positionPrecise || p.position})</span></span>
             <input
               type="text"
               inputMode="numeric"
@@ -697,7 +697,17 @@ function HomeScreen({ matches, matchesLoaded, showNewForm, setShowNewForm, newMa
 
       {!showNewForm && (
         <div className="home-actions-row">
-          <button className="btn btn-primary btn-large" onClick={() => setShowNewForm(true)}>
+          <button
+            className="btn btn-primary btn-large"
+            onClick={() => {
+              const prefilled = {};
+              roster.forEach((p) => {
+                if (p.preferredNumber && !prefilled[p.preferredNumber]) prefilled[p.preferredNumber] = p.id;
+              });
+              setNewMatchForm((f) => ({ ...f, assignments: prefilled }));
+              setShowNewForm(true);
+            }}
+          >
             + Nouveau match
           </button>
           <button className="btn btn-ghost btn-large" onClick={() => importInputRef.current && importInputRef.current.click()}>
@@ -850,6 +860,45 @@ function getPlayerHistory(allMatches, team, player) {
 }
 
 const POSITIONS = ["Gardien", "Défenseur", "Milieu", "Attaquant"];
+const POSITION_PRECISE = {
+  "Gardien": ["Gardien"],
+  "Défenseur": ["Défenseur central", "Latéral droit", "Latéral gauche"],
+  "Milieu": ["Milieu défensif", "Milieu axial", "Milieu offensif"],
+  "Attaquant": ["Ailier droit", "Ailier gauche", "Avant-centre"],
+};
+const STRONG_FOOT_OPTIONS = ["Droit", "Gauche", "Ambidextre"];
+
+function playerFullName(p) {
+  if (p.firstName || p.lastName) return `${p.firstName || ""} ${p.lastName || ""}`.trim();
+  return p.name || "Sans nom";
+}
+
+function resizeImageFile(file, maxSize = 240, quality = 0.82) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const img = new Image();
+      img.onload = () => {
+        let { width, height } = img;
+        if (width > height) {
+          if (width > maxSize) { height = Math.round(height * (maxSize / width)); width = maxSize; }
+        } else if (height > maxSize) {
+          width = Math.round(width * (maxSize / height));
+          height = maxSize;
+        }
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        canvas.getContext("2d").drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL("image/jpeg", quality));
+      };
+      img.onerror = () => reject(new Error("image invalide"));
+      img.src = e.target.result;
+    };
+    reader.onerror = () => reject(new Error("lecture échouée"));
+    reader.readAsDataURL(file);
+  });
+}
 
 function computePlayerUsageByRosterId(allFullMatches) {
   const map = {};
@@ -874,7 +923,11 @@ function RosterScreen({ matches }) {
   const [loaded, setLoaded] = useState(false);
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState(null);
-  const [form, setForm] = useState({ name: "", position: "Attaquant", birthDate: "", notes: "" });
+  const [form, setForm] = useState({
+    firstName: "", lastName: "", position: "Attaquant", positionPrecise: "Avant-centre",
+    strongFoot: "Droit", preferredNumber: "", photo: "", birthDate: "", notes: "",
+  });
+  const [photoBusy, setPhotoBusy] = useState(false);
   const [allFullMatches, setAllFullMatches] = useState([]);
   const importInputRef = useRef(null);
 
@@ -887,7 +940,19 @@ function RosterScreen({ matches }) {
         setRoster((prev) => {
           const merged = [...prev];
           list.forEach((p) => {
-            const entry = { id: p.id || newId(), name: p.name || "Sans nom", position: p.position || "Attaquant", birthDate: p.birthDate || "", notes: p.notes || "" };
+            const entry = {
+              id: p.id || newId(),
+              firstName: p.firstName || "",
+              lastName: p.lastName || "",
+              name: p.name || "",
+              position: p.position || "Attaquant",
+              positionPrecise: p.positionPrecise || "",
+              strongFoot: p.strongFoot || "",
+              preferredNumber: p.preferredNumber || "",
+              photo: p.photo || "",
+              birthDate: p.birthDate || "",
+              notes: p.notes || "",
+            };
             const idx = merged.findIndex((m) => m.id === entry.id);
             if (idx >= 0) merged[idx] = entry; else merged.push(entry);
           });
@@ -937,31 +1002,58 @@ function RosterScreen({ matches }) {
     try {
       localStorage.setItem("tf_roster", JSON.stringify(next));
     } catch (e) {
-      alert("La sauvegarde a échoué.");
+      alert("La sauvegarde a échoué (l'effectif avec photos peut devenir volumineux — essaie de retirer une photo si le problème persiste).");
     }
   }
 
   function openNewForm() {
-    setForm({ name: "", position: "Attaquant", birthDate: "", notes: "" });
+    setForm({
+      firstName: "", lastName: "", position: "Attaquant", positionPrecise: POSITION_PRECISE.Attaquant[0],
+      strongFoot: "Droit", preferredNumber: "", photo: "", birthDate: "", notes: "",
+    });
     setEditingId(null);
     setShowForm(true);
   }
 
   function openEditForm(p) {
-    setForm({ name: p.name || "", position: p.position || "Attaquant", birthDate: p.birthDate || "", notes: p.notes || "" });
+    setForm({
+      firstName: p.firstName || (p.name ? p.name.split(" ")[0] : ""),
+      lastName: p.lastName || (p.name ? p.name.split(" ").slice(1).join(" ") : ""),
+      position: p.position || "Attaquant",
+      positionPrecise: p.positionPrecise || (POSITION_PRECISE[p.position || "Attaquant"] || [])[0] || "",
+      strongFoot: p.strongFoot || "Droit",
+      preferredNumber: p.preferredNumber || "",
+      photo: p.photo || "",
+      birthDate: p.birthDate || "",
+      notes: p.notes || "",
+    });
     setEditingId(p.id);
     setShowForm(true);
   }
 
+  async function handlePhotoChange(e) {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    setPhotoBusy(true);
+    try {
+      const dataUrl = await resizeImageFile(file);
+      setForm((f) => ({ ...f, photo: dataUrl }));
+    } catch (err) {
+      alert("La photo n'a pas pu être chargée.");
+    }
+    setPhotoBusy(false);
+  }
+
   function savePlayer() {
-    if (!form.name.trim()) {
-      alert("Le nom est obligatoire.");
+    if (!form.firstName.trim() && !form.lastName.trim()) {
+      alert("Le prénom ou le nom est obligatoire.");
       return;
     }
+    const cleaned = { ...form, name: `${form.firstName} ${form.lastName}`.trim() };
     if (editingId) {
-      persist(roster.map((p) => (p.id === editingId ? { ...p, ...form } : p)));
+      persist(roster.map((p) => (p.id === editingId ? { ...p, ...cleaned } : p)));
     } else {
-      persist([...roster, { id: newId(), ...form }]);
+      persist([...roster, { id: newId(), ...cleaned }]);
     }
     setShowForm(false);
   }
@@ -971,14 +1063,14 @@ function RosterScreen({ matches }) {
     persist(roster.filter((p) => p.id !== id));
   }
 
-  const sorted = [...roster].sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+  const sorted = [...roster].sort((a, b) => playerFullName(a).localeCompare(playerFullName(b)));
 
   return (
     <div className="stats-screen">
       <div className="stats-screen-header">
         <div className="eyebrow">Assistant coaching</div>
         <h1>Effectifs</h1>
-        <p className="subtitle">Les fiches de tes joueurs, par nom — le numéro se choisit match par match dans Studio, puisqu'il peut changer.</p>
+        <p className="subtitle">Les fiches de tes joueurs — le numéro se choisit match par match dans Studio, puisqu'il peut changer.</p>
       </div>
 
       {!showForm && (
@@ -1004,15 +1096,57 @@ function RosterScreen({ matches }) {
 
       {showForm && (
         <div className="new-match-card">
+          <div className="roster-photo-row">
+            <div className="roster-photo-preview">
+              {form.photo ? <img src={form.photo} alt="" /> : <Users size={22} />}
+            </div>
+            <label className="btn btn-ghost btn-small roster-photo-btn">
+              {photoBusy ? "Chargement…" : form.photo ? "Changer la photo" : "Ajouter une photo"}
+              <input type="file" accept="image/*" style={{ display: "none" }} onChange={handlePhotoChange} />
+            </label>
+            {form.photo && (
+              <button className="icon-btn" onClick={() => setForm((f) => ({ ...f, photo: "" }))} aria-label="Retirer la photo"><X size={14} /></button>
+            )}
+          </div>
           <label>
-            Nom
-            <input type="text" placeholder="ex. Martin Dubois" value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} />
+            Prénom
+            <input type="text" placeholder="ex. Martin" value={form.firstName} onChange={(e) => setForm((f) => ({ ...f, firstName: e.target.value }))} />
           </label>
           <label>
-            Poste
-            <select value={form.position} onChange={(e) => setForm((f) => ({ ...f, position: e.target.value }))}>
+            Nom
+            <input type="text" placeholder="ex. Dubois" value={form.lastName} onChange={(e) => setForm((f) => ({ ...f, lastName: e.target.value }))} />
+          </label>
+          <label>
+            Catégorie de poste
+            <select
+              value={form.position}
+              onChange={(e) => {
+                const position = e.target.value;
+                setForm((f) => ({ ...f, position, positionPrecise: POSITION_PRECISE[position][0] }));
+              }}
+            >
               {POSITIONS.map((pos) => <option key={pos} value={pos}>{pos}</option>)}
             </select>
+          </label>
+          <label>
+            Poste précis
+            <select value={form.positionPrecise} onChange={(e) => setForm((f) => ({ ...f, positionPrecise: e.target.value }))}>
+              {POSITION_PRECISE[form.position].map((pos) => <option key={pos} value={pos}>{pos}</option>)}
+            </select>
+          </label>
+          <label>
+            Pied fort
+            <select value={form.strongFoot} onChange={(e) => setForm((f) => ({ ...f, strongFoot: e.target.value }))}>
+              {STRONG_FOOT_OPTIONS.map((f) => <option key={f} value={f}>{f}</option>)}
+            </select>
+          </label>
+          <label>
+            Numéro préféré (optionnel — pré-remplit la composition, ajustable à chaque match)
+            <input
+              type="text" inputMode="numeric" placeholder="ex. 9"
+              value={form.preferredNumber}
+              onChange={(e) => setForm((f) => ({ ...f, preferredNumber: e.target.value.replace(/[^0-9]/g, "").slice(0, 2) }))}
+            />
           </label>
           <label>
             Date de naissance (optionnel)
@@ -1038,9 +1172,12 @@ function RosterScreen({ matches }) {
           const usage = usageMap[p.id];
           return (
             <div className="roster-card" key={p.id}>
+              <div className="roster-card-photo">
+                {p.photo ? <img src={p.photo} alt="" /> : <Users size={20} />}
+              </div>
               <div className="roster-card-info">
-                <div className="roster-card-name">{p.name}</div>
-                <div className="roster-card-position">{p.position}</div>
+                <div className="roster-card-name">{playerFullName(p)} {p.preferredNumber && <span className="roster-card-prefnum">n°{p.preferredNumber}</span>}</div>
+                <div className="roster-card-position">{p.positionPrecise || p.position}{p.strongFoot ? ` · pied ${p.strongFoot.toLowerCase()}` : ""}</div>
                 {p.birthDate && <div className="roster-card-meta">Né(e) le {formatDateFr(p.birthDate)}</div>}
                 {p.notes && <div className="roster-card-meta">{p.notes}</div>}
                 <div className="roster-card-usage">
@@ -1374,7 +1511,7 @@ function rosterDisplayLabel(playerToken, roster) {
   if (typeof playerToken === "string" && playerToken.startsWith("R")) {
     const id = playerToken.slice(1);
     const r = roster.find((x) => x.id === id);
-    if (r) return r.name;
+    if (r) return playerFullName(r);
   }
   return `n°${playerToken}`;
 }
@@ -2251,7 +2388,7 @@ function TaggingScreen(props) {
     const rid = match.playerAssignments && match.playerAssignments[number];
     if (rid) {
       const p = roster.find((r) => r.id === rid);
-      if (p) return p.name;
+      if (p) return playerFullName(p);
     }
     return null;
   }
@@ -2889,6 +3026,13 @@ const CSS = `
 
   .roster-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; }
   .roster-card { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 16px; display: flex; gap: 14px; align-items: flex-start; }
+  .roster-card-photo { width: 52px; height: 52px; border-radius: 8px; overflow: hidden; background: var(--bg); border: 1px solid var(--line); display: flex; align-items: center; justify-content: center; flex-shrink: 0; color: var(--ink-muted); }
+  .roster-card-photo img { width: 100%; height: 100%; object-fit: cover; }
+  .roster-card-prefnum { font-size: 11px; color: var(--gold); font-weight: 700; margin-left: 6px; }
+  .roster-photo-row { display: flex; align-items: center; gap: 12px; margin-bottom: 4px; }
+  .roster-photo-preview { width: 64px; height: 64px; border-radius: 8px; overflow: hidden; background: var(--bg); border: 1px solid var(--line); display: flex; align-items: center; justify-content: center; color: var(--ink-muted); flex-shrink: 0; }
+  .roster-photo-preview img { width: 100%; height: 100%; object-fit: cover; }
+  .roster-photo-btn { cursor: pointer; }
   .roster-card-number { width: 40px; height: 40px; border-radius: 8px; background: var(--bg); border: 1px solid var(--gold); color: var(--gold); font-weight: 800; font-size: 16px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
   .roster-card-info { flex: 1; min-width: 0; }
   .roster-card-name { font-weight: 700; font-size: 14px; }
