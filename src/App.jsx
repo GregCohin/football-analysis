@@ -324,6 +324,7 @@ export default function App() {
           possession: m.possession || [],
           ratings: m.ratings || {},
           closed: !!m.closed,
+          playerAssignments: m.playerAssignments || {},
         }));
         imported.forEach((m) => writeMatch(m));
         setMatches((prev) => {
