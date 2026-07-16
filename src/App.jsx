@@ -886,8 +886,8 @@ function detectTrend(series) {
   const vals = series.filter((v) => v.value != null);
   if (vals.length < 3) return null;
   const [a, b, c] = vals.slice(-3);
-  if (a.value < b.value && b.value < c.value) return "hausse";
-  if (a.value > b.value && b.value > c.value) return "baisse";
+  if (a.value < b.value && b.value < c.value) return { direction: "hausse", date: c.date, matchName: c.matchName };
+  if (a.value > b.value && b.value > c.value) return { direction: "baisse", date: c.date, matchName: c.matchName };
   return null;
 }
 
@@ -896,8 +896,9 @@ function detectSustainedDeviation(series) {
   if (vals.length < 4) return null;
   const avg = vals.reduce((a, v) => a + v.value, 0) / vals.length;
   const last3 = vals.slice(-3);
-  if (last3.every((v) => v.value < avg)) return { direction: "sous", avg: Math.round(avg * 10) / 10 };
-  if (last3.every((v) => v.value > avg)) return { direction: "au-dessus de", avg: Math.round(avg * 10) / 10 };
+  const ref = last3[2];
+  if (last3.every((v) => v.value < avg)) return { direction: "sous", avg: Math.round(avg * 10) / 10, date: ref.date, matchName: ref.matchName };
+  if (last3.every((v) => v.value > avg)) return { direction: "au-dessus de", avg: Math.round(avg * 10) / 10, date: ref.date, matchName: ref.matchName };
   return null;
 }
 
@@ -906,33 +907,33 @@ function detectRecord(series) {
   if (vals.length < 2) return null;
   const last = vals[vals.length - 1];
   const prevVals = vals.slice(0, -1).map((v) => v.value);
-  if (last.value > Math.max(...prevVals)) return { type: "meilleur", value: last.value };
-  if (last.value < Math.min(...prevVals)) return { type: "pire", value: last.value };
+  if (last.value > Math.max(...prevVals)) return { type: "meilleur", value: last.value, date: last.date, matchName: last.matchName };
+  if (last.value < Math.min(...prevVals)) return { type: "pire", value: last.value, date: last.date, matchName: last.matchName };
   return null;
 }
 
 function signalsForSeries(series, scope, metricLabel) {
   const out = [];
   const trend = detectTrend(series);
-  if (trend) out.push({ scope, positive: trend === "hausse", text: `${metricLabel} en ${trend} depuis 3 matchs` });
+  if (trend) out.push({ scope, positive: trend.direction === "hausse", text: `${metricLabel} en ${trend.direction} depuis 3 matchs`, date: trend.date, matchName: trend.matchName });
   const dev = detectSustainedDeviation(series);
-  if (dev) out.push({ scope, positive: dev.direction === "au-dessus de", text: `${metricLabel} ${dev.direction} la moyenne perso (${dev.avg}/10) depuis 3 matchs` });
+  if (dev) out.push({ scope, positive: dev.direction === "au-dessus de", text: `${metricLabel} ${dev.direction} la moyenne perso (${dev.avg}/10) depuis 3 matchs`, date: dev.date, matchName: dev.matchName });
   const rec = detectRecord(series);
-  if (rec) out.push({ scope, positive: rec.type === "meilleur", text: `${rec.type === "meilleur" ? "Meilleur" : "Pire"} score jamais enregistré pour ${metricLabel.toLowerCase()} (${rec.value}/10)` });
+  if (rec) out.push({ scope, positive: rec.type === "meilleur", text: `${rec.type === "meilleur" ? "Meilleur" : "Pire"} score jamais enregistré pour ${metricLabel.toLowerCase()} (${rec.value}/10)`, date: rec.date, matchName: rec.matchName });
   return out;
 }
 
 function generateAllSignals(matchSummaries, allFullMatches, allPlayers) {
   const signals = [];
-  signals.push(...signalsForSeries(matchSummaries.map((m) => ({ value: m.teamSuggestUs })), "Équipe", "Suggestion"));
-  signals.push(...signalsForSeries(matchSummaries.map((m) => ({ value: m.teamCoachUs })), "Équipe", "Note du coach"));
+  signals.push(...signalsForSeries(matchSummaries.map((m) => ({ value: m.teamSuggestUs, date: m.date, matchName: m.name })), "Équipe", "Suggestion"));
+  signals.push(...signalsForSeries(matchSummaries.map((m) => ({ value: m.teamCoachUs, date: m.date, matchName: m.name })), "Équipe", "Note du coach"));
   allPlayers.forEach((p) => {
     const hist = getPlayerHistory(allFullMatches, p.team, p.player);
     const label = `n°${p.player} (${p.team === "us" ? "Nous" : "Adversaire"})`;
-    signals.push(...signalsForSeries(hist.map((h) => ({ value: h.suggestion })), label, "Suggestion"));
-    signals.push(...signalsForSeries(hist.map((h) => ({ value: h.coachScore })), label, "Note du coach"));
+    signals.push(...signalsForSeries(hist.map((h) => ({ value: h.suggestion, date: h.date, matchName: h.matchName })), label, "Suggestion"));
+    signals.push(...signalsForSeries(hist.map((h) => ({ value: h.coachScore, date: h.date, matchName: h.matchName })), label, "Note du coach"));
   });
-  return signals;
+  return signals.sort((a, b) => new Date(b.date) - new Date(a.date));
 }
 
 function computeProfileStability(allFullMatches) {
@@ -1121,11 +1122,8 @@ function StatsScreen({ matches }) {
     [matchSummaries, allFullMatches, allPlayers]
   );
   const teamSignals = useMemo(() => allSignals.filter((s) => s.scope === "Équipe"), [allSignals]);
+  const individualSignals = useMemo(() => allSignals.filter((s) => s.scope !== "Équipe"), [allSignals]);
   const currentPlayerLabel = selTeam ? `n°${selPlayer} (${selTeam === "us" ? "Nous" : "Adversaire"})` : null;
-  const currentPlayerSignals = useMemo(
-    () => (currentPlayerLabel ? allSignals.filter((s) => s.scope === currentPlayerLabel) : []),
-    [allSignals, currentPlayerLabel]
-  );
 
   function toggleMatchCompare(id) {
     setCompareMatchIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
@@ -1237,28 +1235,6 @@ function StatsScreen({ matches }) {
             </div>
           )}
 
-          <div className="panel-heading">Calendrier de forme</div>
-          <div className="form-calendar">
-            {matchSummaries.map((s) => (
-              <div
-                key={s.id}
-                className="form-calendar-cell"
-                style={{ background: suggestionToColor(s.teamSuggestUs) }}
-                title={`${s.name} — ${formatDateFr(s.date)} — Suggestion ${s.teamSuggestUs}/10 — ${s.goalsUs}-${s.goalsOpp}`}
-              >
-                {resultLetter(s.goalsUs, s.goalsOpp)}
-              </div>
-            ))}
-          </div>
-
-          {teamSignals.length > 0 && (
-            <div className="signals-box">
-              <div className="signals-box-title">Signaux — Équipe</div>
-              {teamSignals.map((s, i) => (
-                <div key={i} className={`signal-item ${s.positive ? "positive" : "negative"}`}>{s.text}</div>
-              ))}
-            </div>
-          )}
           <div className="panel-heading">Évolution de l'équipe (Nous)</div>
           <div className="chart-wrap">
             <ResponsiveContainer width="100%" height={260}>
@@ -1399,15 +1375,6 @@ function StatsScreen({ matches }) {
               </option>
             ))}
           </select>
-
-          {currentPlayerSignals.length > 0 && (
-            <div className="signals-box">
-              <div className="signals-box-title">Signaux — {currentPlayerLabel}</div>
-              {currentPlayerSignals.map((s, i) => (
-                <div key={i} className={`signal-item ${s.positive ? "positive" : "negative"}`}>{s.text}</div>
-              ))}
-            </div>
-          )}
 
           {selectedPlayerKey && playerHistory.length > 0 && (
             <>
@@ -1650,18 +1617,37 @@ function StatsScreen({ matches }) {
 
       {matchSummaries.length > 0 && statsSubTab === "signaux" && (
         <>
-          <div className="panel-heading">Tous les signaux détectés</div>
           {allSignals.length === 0 && (
             <div className="empty-state">Rien à signaler pour l'instant — les signaux apparaissent à partir de 3-4 matchs clôturés pour une même équipe ou un même joueur.</div>
           )}
           {allSignals.length > 0 && (
-            <div className="signals-box signals-box-full">
-              {allSignals.map((s, i) => (
-                <div key={i} className={`signal-item ${s.positive ? "positive" : "negative"}`}>
-                  <span className="signal-scope">{s.scope}</span> — {s.text}
+            <>
+              <div className="panel-heading">Signaux équipe</div>
+              {teamSignals.length === 0 && <div className="empty-state">Rien à signaler pour l'équipe pour l'instant.</div>}
+              {teamSignals.length > 0 && (
+                <div className="signals-box signals-box-full">
+                  {teamSignals.map((s, i) => (
+                    <div key={i} className={`signal-item ${s.positive ? "positive" : "negative"}`}>
+                      {s.text}
+                      <span className="signal-date">détecté le {formatDateFr(s.date)} · {s.matchName}</span>
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </div>
+              )}
+
+              <div className="panel-heading" style={{ marginTop: 20 }}>Signaux individuels</div>
+              {individualSignals.length === 0 && <div className="empty-state">Rien à signaler côté joueurs pour l'instant.</div>}
+              {individualSignals.length > 0 && (
+                <div className="signals-box signals-box-full">
+                  {individualSignals.map((s, i) => (
+                    <div key={i} className={`signal-item ${s.positive ? "positive" : "negative"}`}>
+                      <span className="signal-scope">{s.scope}</span> — {s.text}
+                      <span className="signal-date">détecté le {formatDateFr(s.date)} · {s.matchName}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
           )}
         </>
       )}
@@ -2451,6 +2437,7 @@ const CSS = `
   .signal-item.positive { border-left-color: var(--gold); color: var(--ink); }
   .signal-item.negative { border-left-color: var(--crimson); color: var(--ink); }
   .signal-scope { font-weight: 700; }
+  .signal-date { display: block; font-size: 10px; color: var(--ink-muted); margin-top: 2px; font-style: italic; }
   .signals-box-full { margin-bottom: 0; }
   .range-preset-btn.active-preset { background: var(--gold); color: var(--gold-ink); border-color: var(--gold); }
   .radar-note { font-size: 11px; color: var(--ink-muted); line-height: 1.5; margin-top: 8px; max-width: 560px; }
