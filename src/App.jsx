@@ -873,11 +873,74 @@ function playerFullName(p) {
   return p.name || "Sans nom";
 }
 
+const PHYSICAL_TESTS = [
+  { key: "vma", label: "VMA", unit: "km/h", step: "0.1" },
+  { key: "sprint10m", label: "Sprint 10m", unit: "s", step: "0.01" },
+  { key: "sprint30m", label: "Sprint 30m", unit: "s", step: "0.01" },
+  { key: "agilite", label: "Agilité (505/T-test)", unit: "s", step: "0.01" },
+  { key: "detente", label: "Détente CMJ", unit: "cm", step: "0.1" },
+  { key: "rsa", label: "RSA moyen", unit: "s", step: "0.01" },
+  { key: "taille", label: "Taille", unit: "cm", step: "1" },
+  { key: "poids", label: "Poids", unit: "kg", step: "0.1" },
+];
+
+// Migre l'ancien schéma (une valeur + une date partagée) vers un historique par test, sans rien perdre.
+function getTestHistory(p, key) {
+  if (Array.isArray(p[`${key}History`])) return p[`${key}History`];
+  if (p[key]) return [{ date: p.testDate || "", value: p[key] }];
+  return [];
+}
+
+function getLatestTestValue(p, key) {
+  const hist = getTestHistory(p, key);
+  if (hist.length === 0) return null;
+  const sorted = [...hist].sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
+  return sorted[0].value;
+}
+
 function computeIMC(p) {
-  const taille = parseFloat(p.taille);
-  const poids = parseFloat(p.poids);
+  const taille = parseFloat(getLatestTestValue(p, "taille"));
+  const poids = parseFloat(getLatestTestValue(p, "poids"));
   if (!taille || !poids) return null;
   return Math.round((poids / ((taille / 100) ** 2)) * 10) / 10;
+}
+
+function TestHistoryEditor({ testDef, entries, setEntries }) {
+  const [newDate, setNewDate] = useState(todayIso());
+  const [newValue, setNewValue] = useState("");
+
+  function addEntry() {
+    if (!newValue) return;
+    const next = [...entries, { date: newDate, value: newValue }].sort((a, b) => new Date(a.date || 0) - new Date(b.date || 0));
+    setEntries(next);
+    setNewValue("");
+  }
+
+  function removeEntry(idx) {
+    setEntries(entries.filter((_, i) => i !== idx));
+  }
+
+  return (
+    <div className="test-history-block">
+      <div className="test-history-label">{testDef.label} ({testDef.unit})</div>
+      {entries.length > 0 && (
+        <div className="test-history-list">
+          {entries.map((e, i) => (
+            <div key={i} className="test-history-row">
+              <span className="test-history-date">{e.date ? formatDateFr(e.date) : "date inconnue"}</span>
+              <span className="test-history-value">{e.value} {testDef.unit}</span>
+              <button className="icon-btn" onClick={() => removeEntry(i)} aria-label="Supprimer cette entrée"><X size={11} /></button>
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="test-history-add">
+        <input type="date" value={newDate} onChange={(e) => setNewDate(e.target.value)} />
+        <input type="number" step={testDef.step} placeholder="valeur" value={newValue} onChange={(e) => setNewValue(e.target.value)} />
+        <button className="btn btn-ghost btn-small" onClick={addEntry}>+ Ajouter</button>
+      </div>
+    </div>
+  );
 }
 
 function resizeImageFile(file, maxSize = 240, quality = 0.82) {
@@ -933,7 +996,7 @@ function RosterScreen({ matches }) {
   const [form, setForm] = useState({
     firstName: "", lastName: "", position: "Attaquant", positionPrecise: "Avant-centre",
     strongFoot: "Droit", preferredNumber: "", photo: "", birthDate: "", notes: "",
-    vma: "", sprint10m: "", sprint30m: "", agilite: "", detente: "", rsa: "", taille: "", poids: "", testDate: "",
+    vmaHistory: [], sprint10mHistory: [], sprint30mHistory: [], agiliteHistory: [], detenteHistory: [], rsaHistory: [], tailleHistory: [], poidsHistory: [],
   });
   const [photoBusy, setPhotoBusy] = useState(false);
   const [allFullMatches, setAllFullMatches] = useState([]);
@@ -960,15 +1023,14 @@ function RosterScreen({ matches }) {
               photo: p.photo || "",
               birthDate: p.birthDate || "",
               notes: p.notes || "",
-              vma: p.vma || "",
-              sprint10m: p.sprint10m || "",
-              sprint30m: p.sprint30m || "",
-              agilite: p.agilite || "",
-              detente: p.detente || "",
-              rsa: p.rsa || "",
-              taille: p.taille || "",
-              poids: p.poids || "",
-              testDate: p.testDate || "",
+              vmaHistory: p.vmaHistory || getTestHistory(p, "vma"),
+              sprint10mHistory: p.sprint10mHistory || getTestHistory(p, "sprint10m"),
+              sprint30mHistory: p.sprint30mHistory || getTestHistory(p, "sprint30m"),
+              agiliteHistory: p.agiliteHistory || getTestHistory(p, "agilite"),
+              detenteHistory: p.detenteHistory || getTestHistory(p, "detente"),
+              rsaHistory: p.rsaHistory || getTestHistory(p, "rsa"),
+              tailleHistory: p.tailleHistory || getTestHistory(p, "taille"),
+              poidsHistory: p.poidsHistory || getTestHistory(p, "poids"),
             };
             const idx = merged.findIndex((m) => m.id === entry.id);
             if (idx >= 0) merged[idx] = entry; else merged.push(entry);
@@ -1027,7 +1089,7 @@ function RosterScreen({ matches }) {
     setForm({
       firstName: "", lastName: "", position: "Attaquant", positionPrecise: POSITION_PRECISE.Attaquant[0],
       strongFoot: "Droit", preferredNumber: "", photo: "", birthDate: "", notes: "",
-      vma: "", sprint10m: "", sprint30m: "", agilite: "", detente: "", rsa: "", taille: "", poids: "", testDate: "",
+      vmaHistory: [], sprint10mHistory: [], sprint30mHistory: [], agiliteHistory: [], detenteHistory: [], rsaHistory: [], tailleHistory: [], poidsHistory: [],
     });
     setEditingId(null);
     setShowForm(true);
@@ -1044,15 +1106,14 @@ function RosterScreen({ matches }) {
       photo: p.photo || "",
       birthDate: p.birthDate || "",
       notes: p.notes || "",
-      vma: p.vma || "",
-      sprint10m: p.sprint10m || "",
-      sprint30m: p.sprint30m || "",
-      agilite: p.agilite || "",
-      detente: p.detente || "",
-      rsa: p.rsa || "",
-      taille: p.taille || "",
-      poids: p.poids || "",
-      testDate: p.testDate || "",
+      vmaHistory: getTestHistory(p, "vma"),
+      sprint10mHistory: getTestHistory(p, "sprint10m"),
+      sprint30mHistory: getTestHistory(p, "sprint30m"),
+      agiliteHistory: getTestHistory(p, "agilite"),
+      detenteHistory: getTestHistory(p, "detente"),
+      rsaHistory: getTestHistory(p, "rsa"),
+      tailleHistory: getTestHistory(p, "taille"),
+      poidsHistory: getTestHistory(p, "poids"),
     });
     setEditingId(p.id);
     setShowForm(true);
@@ -1184,44 +1245,16 @@ function RosterScreen({ matches }) {
             <input type="text" placeholder="ex. capitaine, revient de blessure..." value={form.notes} onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))} />
           </label>
 
-          <div className="roster-form-section-title">Tests physiques (optionnel)</div>
+          <div className="roster-form-section-title">Tests physiques (optionnel — ajoute une entrée datée à chaque nouveau test)</div>
           <div className="roster-physical-grid">
-            <label>
-              VMA (km/h)
-              <input type="number" step="0.1" placeholder="ex. 14.5" value={form.vma} onChange={(e) => setForm((f) => ({ ...f, vma: e.target.value }))} />
-            </label>
-            <label>
-              Sprint 10m (s)
-              <input type="number" step="0.01" placeholder="ex. 1.85" value={form.sprint10m} onChange={(e) => setForm((f) => ({ ...f, sprint10m: e.target.value }))} />
-            </label>
-            <label>
-              Sprint 30m (s)
-              <input type="number" step="0.01" placeholder="ex. 4.20" value={form.sprint30m} onChange={(e) => setForm((f) => ({ ...f, sprint30m: e.target.value }))} />
-            </label>
-            <label>
-              Agilité 505/T-test (s)
-              <input type="number" step="0.01" placeholder="ex. 4.60" value={form.agilite} onChange={(e) => setForm((f) => ({ ...f, agilite: e.target.value }))} />
-            </label>
-            <label>
-              Détente CMJ (cm)
-              <input type="number" step="0.1" placeholder="ex. 38" value={form.detente} onChange={(e) => setForm((f) => ({ ...f, detente: e.target.value }))} />
-            </label>
-            <label>
-              RSA moyen (s)
-              <input type="number" step="0.01" placeholder="ex. 5.10" value={form.rsa} onChange={(e) => setForm((f) => ({ ...f, rsa: e.target.value }))} />
-            </label>
-            <label>
-              Taille (cm)
-              <input type="number" step="1" placeholder="ex. 178" value={form.taille} onChange={(e) => setForm((f) => ({ ...f, taille: e.target.value }))} />
-            </label>
-            <label>
-              Poids (kg)
-              <input type="number" step="0.1" placeholder="ex. 68" value={form.poids} onChange={(e) => setForm((f) => ({ ...f, poids: e.target.value }))} />
-            </label>
-            <label>
-              Date des tests
-              <input type="date" value={form.testDate} onChange={(e) => setForm((f) => ({ ...f, testDate: e.target.value }))} />
-            </label>
+            <TestHistoryEditor testDef={PHYSICAL_TESTS[0]} entries={form.vmaHistory} setEntries={(v) => setForm((f) => ({ ...f, vmaHistory: v }))} />
+            <TestHistoryEditor testDef={PHYSICAL_TESTS[1]} entries={form.sprint10mHistory} setEntries={(v) => setForm((f) => ({ ...f, sprint10mHistory: v }))} />
+            <TestHistoryEditor testDef={PHYSICAL_TESTS[2]} entries={form.sprint30mHistory} setEntries={(v) => setForm((f) => ({ ...f, sprint30mHistory: v }))} />
+            <TestHistoryEditor testDef={PHYSICAL_TESTS[3]} entries={form.agiliteHistory} setEntries={(v) => setForm((f) => ({ ...f, agiliteHistory: v }))} />
+            <TestHistoryEditor testDef={PHYSICAL_TESTS[4]} entries={form.detenteHistory} setEntries={(v) => setForm((f) => ({ ...f, detenteHistory: v }))} />
+            <TestHistoryEditor testDef={PHYSICAL_TESTS[5]} entries={form.rsaHistory} setEntries={(v) => setForm((f) => ({ ...f, rsaHistory: v }))} />
+            <TestHistoryEditor testDef={PHYSICAL_TESTS[6]} entries={form.tailleHistory} setEntries={(v) => setForm((f) => ({ ...f, tailleHistory: v }))} />
+            <TestHistoryEditor testDef={PHYSICAL_TESTS[7]} entries={form.poidsHistory} setEntries={(v) => setForm((f) => ({ ...f, poidsHistory: v }))} />
           </div>
 
           <div className="form-actions">
@@ -1249,22 +1282,33 @@ function RosterScreen({ matches }) {
                 {p.birthDate && <div className="roster-card-meta">Né(e) le {formatDateFr(p.birthDate)}</div>}
                 {p.notes && <div className="roster-card-meta">{p.notes}</div>}
                 {(() => {
+                  const vma = getLatestTestValue(p, "vma");
+                  const s10 = getLatestTestValue(p, "sprint10m");
+                  const s30 = getLatestTestValue(p, "sprint30m");
+                  const agilite = getLatestTestValue(p, "agilite");
+                  const detente = getLatestTestValue(p, "detente");
+                  const rsa = getLatestTestValue(p, "rsa");
+                  const taille = getLatestTestValue(p, "taille");
+                  const poids = getLatestTestValue(p, "poids");
                   const imc = computeIMC(p);
                   const items = [
-                    p.vma && `VMA ${p.vma} km/h`,
-                    p.sprint10m && `10m ${p.sprint10m}s`,
-                    p.sprint30m && `30m ${p.sprint30m}s`,
-                    p.agilite && `Agilité ${p.agilite}s`,
-                    p.detente && `Détente ${p.detente}cm`,
-                    p.rsa && `RSA ${p.rsa}s`,
-                    p.taille && `${p.taille}cm`,
-                    p.poids && `${p.poids}kg`,
+                    vma && `VMA ${vma} km/h`,
+                    s10 && `10m ${s10}s`,
+                    s30 && `30m ${s30}s`,
+                    agilite && `Agilité ${agilite}s`,
+                    detente && `Détente ${detente}cm`,
+                    rsa && `RSA ${rsa}s`,
+                    taille && `${taille}cm`,
+                    poids && `${poids}kg`,
                     imc && `IMC ${imc}`,
                   ].filter(Boolean);
+                  const totalTests = PHYSICAL_TESTS.reduce((sum, t) => sum + getTestHistory(p, t.key).length, 0);
                   return items.length > 0 ? (
                     <div className="roster-card-physical">
-                      {items.join(" · ")}
-                      {p.testDate && <span className="roster-card-testdate"> (tests du {formatDateFr(p.testDate)})</span>}
+                      {items.join(" · ")}{" "}
+                      <span className="roster-card-testdate">
+                        (dernière valeur · {totalTests} test{totalTests > 1 ? "s" : ""} au total, voir "Modifier")
+                      </span>
                     </div>
                   ) : null;
                 })()}
@@ -3122,9 +3166,16 @@ const CSS = `
   .roster-photo-preview img { width: 100%; height: 100%; object-fit: cover; }
   .roster-photo-btn { cursor: pointer; }
   .roster-form-section-title { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--gold); font-weight: 700; margin-top: 8px; padding-top: 14px; border-top: 1px solid var(--line); }
-  .roster-physical-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 12px; }
-  .roster-physical-grid label { display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--ink-muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
-  .roster-physical-grid input { background: var(--bg); border: 1px solid var(--line); color: var(--ink); border-radius: 6px; padding: 9px 10px; font-size: 14px; font-weight: 400; text-transform: none; letter-spacing: normal; }
+  .roster-physical-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px; }
+  .test-history-block { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px; }
+  .test-history-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-muted); font-weight: 700; margin-bottom: 6px; }
+  .test-history-list { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; max-height: 120px; overflow-y: auto; }
+  .test-history-row { display: flex; align-items: center; gap: 8px; font-size: 12px; background: var(--surface); border-radius: 5px; padding: 5px 8px; }
+  .test-history-date { color: var(--ink-muted); flex-shrink: 0; }
+  .test-history-value { flex: 1; font-weight: 700; color: var(--gold); }
+  .test-history-add { display: flex; gap: 6px; }
+  .test-history-add input[type="date"] { flex: 1; background: var(--surface); border: 1px solid var(--line); color: var(--ink); border-radius: 5px; padding: 6px 8px; font-size: 12px; min-width: 0; }
+  .test-history-add input[type="number"] { width: 70px; background: var(--surface); border: 1px solid var(--line); color: var(--ink); border-radius: 5px; padding: 6px 8px; font-size: 12px; }
   .roster-card-physical { font-size: 11px; color: var(--ink); margin-top: 6px; line-height: 1.5; }
   .roster-card-testdate { color: var(--ink-muted); font-style: italic; }
   .roster-card-number { width: 40px; height: 40px; border-radius: 8px; background: var(--bg); border: 1px solid var(--gold); color: var(--gold); font-weight: 800; font-size: 16px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
