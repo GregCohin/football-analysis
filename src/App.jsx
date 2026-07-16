@@ -757,7 +757,7 @@ function getAllPlayersEver(allMatches) {
   const seen = new Map();
   allMatches.forEach((match) => {
     const inThisMatch = new Set();
-    match.tags.forEach((t) => { if (t.player) inThisMatch.add(`${t.team}_${t.player}`); });
+    match.tags.forEach((t) => { if (t.player && t.team === "us") inThisMatch.add(`${t.team}_${t.player}`); });
     inThisMatch.forEach((key) => {
       if (!seen.has(key)) {
         const idx = key.indexOf("_");
@@ -971,10 +971,8 @@ function StatsScreen({ matches }) {
   const [teamRadarRange, setTeamRadarRange] = useState("all");
   const teamRadarChartData = useMemo(() => {
     const usTags = gatherTeamTags(allFullMatches, "us", teamRadarRange === "last5");
-    const oppTags = gatherTeamTags(allFullMatches, "opp", teamRadarRange === "last5");
     const usValues = computeRadarValues(usTags, RADAR_AXES);
-    const oppValues = computeRadarValues(oppTags, RADAR_AXES);
-    return RADAR_AXES.map((axis, i) => ({ axis: axis.label, us: usValues[i].value, opp: oppValues[i].value }));
+    return RADAR_AXES.map((axis, i) => ({ axis: axis.label, us: usValues[i].value }));
   }, [allFullMatches, teamRadarRange]);
 
   const collectiveComparison = useMemo(() => buildCollectiveComparison(allFullMatches), [allFullMatches]);
@@ -999,9 +997,8 @@ function StatsScreen({ matches }) {
 
   const radarCompareValues = useMemo(() => {
     if (!radarCompareWith || !selTeam) return null;
-    if (radarCompareWith === "team_us" || radarCompareWith === "team_opp") {
-      const team = radarCompareWith === "team_us" ? "us" : "opp";
-      const tags = gatherTeamTags(allFullMatches, team, radarRange === "last5");
+    if (radarCompareWith === "team_us") {
+      const tags = gatherTeamTags(allFullMatches, "us", radarRange === "last5");
       return computeRadarValues(tags, radarAxesUsed);
     }
     const idx = radarCompareWith.indexOf("_");
@@ -1172,7 +1169,6 @@ function StatsScreen({ matches }) {
                 <Tooltip contentStyle={{ background: "#182A21", border: "1px solid #26362C", borderRadius: 6, color: "#EEF3EC" }} />
                 <Legend wrapperStyle={{ fontSize: 11 }} />
                 <Radar name="Nous" dataKey="us" stroke="#E3B23C" fill="#E3B23C" fillOpacity={0.35} />
-                <Radar name="Adversaire" dataKey="opp" stroke="#D6483F" fill="#D6483F" fillOpacity={0.2} />
               </RadarChart>
             </ResponsiveContainer>
           </div>
@@ -1291,10 +1287,9 @@ function StatsScreen({ matches }) {
               <select className="player-select" value={radarCompareWith} onChange={(e) => setRadarCompareWith(e.target.value)}>
                 <option value="">Comparer avec… (optionnel)</option>
                 <option value="team_us">Moyenne de l'équipe (Nous)</option>
-                <option value="team_opp">Moyenne de l'équipe (Adversaire)</option>
                 {allPlayers.filter((p) => `${p.team}_${p.player}` !== selectedPlayerKey).map((p) => (
                   <option key={`${p.team}_${p.player}`} value={`${p.team}_${p.player}`}>
-                    n°{p.player} ({p.team === "us" ? "Nous" : "Adversaire"})
+                    n°{p.player}
                   </option>
                 ))}
               </select>
@@ -1309,7 +1304,7 @@ function StatsScreen({ matches }) {
                     <Radar name={currentPlayerLabel} dataKey="main" stroke="#E3B23C" fill="#E3B23C" fillOpacity={0.35} />
                     {radarCompareValues && (
                       <Radar
-                        name={radarCompareWith === "team_us" ? "Nous (moyenne)" : radarCompareWith === "team_opp" ? "Adversaire (moyenne)" : `n°${radarCompareWith.slice(radarCompareWith.indexOf("_") + 1)}`}
+                        name={radarCompareWith === "team_us" ? "Nous (moyenne)" : `n°${radarCompareWith.slice(radarCompareWith.indexOf("_") + 1)}`}
                         dataKey="compare"
                         stroke="#D6483F"
                         fill="#D6483F"
