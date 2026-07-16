@@ -917,6 +917,15 @@ function StatsScreen({ matches }) {
     () => (selTeam ? getPlayerHistory(allFullMatches, selTeam, selPlayer) : []),
     [allFullMatches, selTeam, selPlayer]
   );
+  const [teamRadarRange, setTeamRadarRange] = useState("all");
+  const teamRadarChartData = useMemo(() => {
+    const usTags = gatherTeamTags(allFullMatches, "us", teamRadarRange === "last5");
+    const oppTags = gatherTeamTags(allFullMatches, "opp", teamRadarRange === "last5");
+    const usValues = computeRadarValues(usTags, RADAR_AXES);
+    const oppValues = computeRadarValues(oppTags, RADAR_AXES);
+    return RADAR_AXES.map((axis, i) => ({ axis: axis.label, us: usValues[i].value, opp: oppValues[i].value }));
+  }, [allFullMatches, teamRadarRange]);
+
   const collectiveComparison = useMemo(() => buildCollectiveComparison(allFullMatches), [allFullMatches]);
   const individualComparison = useMemo(
     () => (selTeam ? buildIndividualComparison(allFullMatches, selTeam, selPlayer) : null),
@@ -1094,6 +1103,27 @@ function StatsScreen({ matches }) {
                 ))}
               </tbody>
             </table>
+          </div>
+
+          <div className="range-filter-header" style={{ marginTop: 20 }}>
+            <div className="panel-heading" style={{ marginBottom: 0 }}>Profil radar collectif</div>
+            <div className="range-filter-actions">
+              <button className={`range-preset-btn ${teamRadarRange === "last5" ? "active-preset" : ""}`} onClick={() => setTeamRadarRange("last5")}>5 derniers</button>
+              <button className={`range-preset-btn ${teamRadarRange === "all" ? "active-preset" : ""}`} onClick={() => setTeamRadarRange("all")}>Ensemble</button>
+            </div>
+          </div>
+          <div className="chart-wrap">
+            <ResponsiveContainer width="100%" height={320}>
+              <RadarChart data={teamRadarChartData} outerRadius="70%">
+                <PolarGrid stroke="#26362C" />
+                <PolarAngleAxis dataKey="axis" tick={{ fill: "#8FA599", fontSize: 11 }} />
+                <PolarRadiusAxis domain={[0, 100]} tick={{ fill: "#8FA599", fontSize: 9 }} />
+                <Tooltip contentStyle={{ background: "#182A21", border: "1px solid #26362C", borderRadius: 6, color: "#EEF3EC" }} />
+                <Legend wrapperStyle={{ fontSize: 11 }} />
+                <Radar name="Nous" dataKey="us" stroke="#E3B23C" fill="#E3B23C" fillOpacity={0.35} />
+                <Radar name="Adversaire" dataKey="opp" stroke="#D6483F" fill="#D6483F" fillOpacity={0.2} />
+              </RadarChart>
+            </ResponsiveContainer>
           </div>
 
           <div className="range-filter-header" style={{ marginTop: 20 }}>
