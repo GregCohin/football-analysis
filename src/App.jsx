@@ -531,9 +531,7 @@ export default function App() {
       {section === "gameplan" && (
         <PlaceholderScreen title="Projet de jeu" description="Formalise les principes de ton projet de jeu, phase par phase, pour qu'ils nourrissent la notation et les séances." />
       )}
-      {section === "squad" && (
-        <PlaceholderScreen title="Effectifs" description="Fiches joueurs : informations, poste, disponibilité, historique." />
-      )}
+      {section === "squad" && <RosterScreen matches={matches} />}
       {section === "competitions" && (
         <PlaceholderScreen title="Compétitions" description="Suivi des championnats et coupes disputés, classements et calendriers." />
       )}
@@ -788,6 +786,177 @@ function getPlayerHistory(allMatches, team, player) {
       };
     })
     .filter(Boolean);
+}
+
+const POSITIONS = ["Gardien", "Défenseur", "Milieu", "Attaquant"];
+
+function computePlayerUsageMap(allFullMatches) {
+  const map = {};
+  allFullMatches.forEach((m) => {
+    const seenInMatch = new Set();
+    m.tags.forEach((t) => {
+      if (t.team !== "us" || !t.player) return;
+      if (!map[t.player]) map[t.player] = { matchCount: 0, totalActions: 0 };
+      map[t.player].totalActions++;
+      seenInMatch.add(t.player);
+    });
+    seenInMatch.forEach((num) => { map[num].matchCount++; });
+  });
+  return map;
+}
+
+function RosterScreen({ matches }) {
+  const [roster, setRoster] = useState([]);
+  const [loaded, setLoaded] = useState(false);
+  const [showForm, setShowForm] = useState(false);
+  const [editingId, setEditingId] = useState(null);
+  const [form, setForm] = useState({ number: "", name: "", position: "Attaquant", birthDate: "", notes: "" });
+  const [allFullMatches, setAllFullMatches] = useState([]);
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem("tf_roster");
+      setRoster(raw ? JSON.parse(raw) : []);
+    } catch (e) {
+      setRoster([]);
+    }
+    setLoaded(true);
+  }, []);
+
+  useEffect(() => {
+    const full = matches
+      .map((m) => {
+        try {
+          const raw = localStorage.getItem(matchStorageKey(m.id));
+          return raw ? JSON.parse(raw) : null;
+        } catch (e) {
+          return null;
+        }
+      })
+      .filter((m) => m && m.closed);
+    setAllFullMatches(full);
+  }, [matches]);
+
+  const usageMap = useMemo(() => computePlayerUsageMap(allFullMatches), [allFullMatches]);
+
+  function persist(next) {
+    setRoster(next);
+    try {
+      localStorage.setItem("tf_roster", JSON.stringify(next));
+    } catch (e) {
+      alert("La sauvegarde a échoué.");
+    }
+  }
+
+  function openNewForm() {
+    setForm({ number: "", name: "", position: "Attaquant", birthDate: "", notes: "" });
+    setEditingId(null);
+    setShowForm(true);
+  }
+
+  function openEditForm(p) {
+    setForm({ number: p.number, name: p.name || "", position: p.position || "Attaquant", birthDate: p.birthDate || "", notes: p.notes || "" });
+    setEditingId(p.id);
+    setShowForm(true);
+  }
+
+  function savePlayer() {
+    const number = form.number.trim();
+    if (!number) {
+      alert("Le numéro est obligatoire.");
+      return;
+    }
+    if (editingId) {
+      persist(roster.map((p) => (p.id === editingId ? { ...p, ...form, number } : p)));
+    } else {
+      const dup = roster.some((p) => p.number === number);
+      if (dup && !confirm(`Le numéro ${number} est déjà utilisé par un autre joueur de l'effectif. Continuer quand même ?`)) return;
+      persist([...roster, { id: newId(), ...form, number }]);
+    }
+    setShowForm(false);
+  }
+
+  function deletePlayer(id) {
+    if (!confirm("Supprimer cette fiche de l'effectif ? (les données déjà taguées dans Studio ne sont pas affectées)")) return;
+    persist(roster.filter((p) => p.id !== id));
+  }
+
+  const sorted = [...roster].sort((a, b) => Number(a.number) - Number(b.number));
+
+  return (
+    <div className="stats-screen">
+      <div className="stats-screen-header">
+        <div className="eyebrow">Assistant coaching</div>
+        <h1>Effectifs</h1>
+        <p className="subtitle">Les fiches de tes joueurs — nom et poste, au-delà du simple numéro utilisé dans Studio.</p>
+      </div>
+
+      {!showForm && (
+        <button className="btn btn-primary btn-large" onClick={openNewForm} style={{ marginBottom: 20 }}>
+          + Ajouter un joueur
+        </button>
+      )}
+
+      {showForm && (
+        <div className="new-match-card">
+          <label>
+            Numéro
+            <input type="text" inputMode="numeric" value={form.number} onChange={(e) => setForm((f) => ({ ...f, number: e.target.value.replace(/[^0-9]/g, "").slice(0, 2) }))} />
+          </label>
+          <label>
+            Nom
+            <input type="text" placeholder="ex. Martin Dubois" value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} />
+          </label>
+          <label>
+            Poste
+            <select value={form.position} onChange={(e) => setForm((f) => ({ ...f, position: e.target.value }))}>
+              {POSITIONS.map((pos) => <option key={pos} value={pos}>{pos}</option>)}
+            </select>
+          </label>
+          <label>
+            Date de naissance (optionnel)
+            <input type="date" value={form.birthDate} onChange={(e) => setForm((f) => ({ ...f, birthDate: e.target.value }))} />
+          </label>
+          <label>
+            Notes (optionnel)
+            <input type="text" placeholder="ex. capitaine, revient de blessure..." value={form.notes} onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))} />
+          </label>
+          <div className="form-actions">
+            <button className="btn btn-primary" onClick={savePlayer}>Enregistrer</button>
+            <button className="btn btn-ghost" onClick={() => setShowForm(false)}>Annuler</button>
+          </div>
+        </div>
+      )}
+
+      {loaded && sorted.length === 0 && !showForm && (
+        <div className="empty-state">Aucun joueur enregistré pour l'instant — ajoute ta première fiche.</div>
+      )}
+
+      <div className="roster-grid">
+        {sorted.map((p) => {
+          const usage = usageMap[p.number];
+          return (
+            <div className="roster-card" key={p.id}>
+              <div className="roster-card-number">{p.number}</div>
+              <div className="roster-card-info">
+                <div className="roster-card-name">{p.name || "Sans nom"}</div>
+                <div className="roster-card-position">{p.position}</div>
+                {p.birthDate && <div className="roster-card-meta">Né(e) le {formatDateFr(p.birthDate)}</div>}
+                {p.notes && <div className="roster-card-meta">{p.notes}</div>}
+                <div className="roster-card-usage">
+                  {usage ? `${usage.matchCount} match${usage.matchCount > 1 ? "s" : ""} · ${usage.totalActions} actions taguées` : "Aucune action taguée pour l'instant"}
+                </div>
+              </div>
+              <div className="roster-card-actions">
+                <button className="btn btn-ghost btn-small" onClick={() => openEditForm(p)}>Modifier</button>
+                <button className="icon-btn" onClick={() => deletePlayer(p.id)} aria-label="Supprimer"><X size={14} /></button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
 }
 
 function PlaceholderScreen({ title, description }) {
@@ -2523,7 +2692,18 @@ const CSS = `
   .new-match-card { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 20px; margin-top: 16px; display: flex; flex-direction: column; gap: 14px; }
   .new-match-card label { display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--ink-muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
   .new-match-card input { background: var(--bg); border: 1px solid var(--line); color: var(--ink); border-radius: 6px; padding: 9px 10px; font-size: 14px; font-weight: 400; text-transform: none; letter-spacing: normal; }
+  .new-match-card select { background: var(--bg); border: 1px solid var(--line); color: var(--ink); border-radius: 6px; padding: 9px 10px; font-size: 14px; font-weight: 400; text-transform: none; letter-spacing: normal; }
   .form-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 4px; }
+
+  .roster-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; }
+  .roster-card { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 16px; display: flex; gap: 14px; align-items: flex-start; }
+  .roster-card-number { width: 40px; height: 40px; border-radius: 8px; background: var(--bg); border: 1px solid var(--gold); color: var(--gold); font-weight: 800; font-size: 16px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+  .roster-card-info { flex: 1; min-width: 0; }
+  .roster-card-name { font-weight: 700; font-size: 14px; }
+  .roster-card-position { font-size: 11px; color: var(--gold); font-weight: 600; margin-top: 2px; }
+  .roster-card-meta { font-size: 11px; color: var(--ink-muted); margin-top: 3px; }
+  .roster-card-usage { font-size: 10px; color: var(--ink-muted); margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); }
+  .roster-card-actions { display: flex; flex-direction: column; gap: 6px; align-items: flex-end; }
 
   .match-list { margin-top: 24px; display: flex; flex-direction: column; gap: 10px; }
   .empty-state { color: var(--ink-muted); font-size: 13px; padding: 24px; text-align: center; border: 1px dashed var(--line); border-radius: 8px; }
