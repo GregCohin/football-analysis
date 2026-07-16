@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from "recharts";
-import { Play, Pause, ArrowLeft, X, Download, Video as VideoIcon, Film } from "lucide-react";
+import { Play, Pause, ArrowLeft, X, Download, Video as VideoIcon, Film, Menu, Home, Target, Users, Trophy, BarChart, ClipboardList, FileText, Eye, Search, Activity } from "lucide-react";
 import { generateCompilation } from "./videoCompiler";
 
 const EVENT_CATEGORIES = [
@@ -65,6 +65,21 @@ const EVENT_CATEGORIES = [
 
 const ALL_EVENTS = EVENT_CATEGORIES.flatMap((c) => c.events);
 const EVENT_MAP = Object.fromEntries(ALL_EVENTS.map((e) => [e.key, e]));
+
+const SECTIONS = [
+  { key: "accueil", label: "Accueil", icon: Home },
+  { key: "gameplan", label: "Projet de jeu", icon: Target },
+  { key: "squad", label: "Effectifs", icon: Users },
+  { key: "competitions", label: "Compétitions", icon: Trophy },
+  { key: "stats", label: "Statistiques", icon: BarChart },
+  { key: "sessions", label: "Séance", icon: ClipboardList },
+  { key: "studio", label: "Studio", icon: VideoIcon },
+  { key: "reports", label: "Rapports de matchs", icon: FileText },
+  { key: "observation", label: "Observation", icon: Eye },
+  { key: "scouting", label: "Scouting", icon: Search },
+  { key: "videotheque", label: "Vidéothèque", icon: Film },
+  { key: "medical", label: "Suivi médical", icon: Activity },
+];
 
 const MATCHES_INDEX_KEY = "tf_matches_index";
 const matchStorageKey = (id) => `tf_match_${id}`;
@@ -199,7 +214,8 @@ function computeRatingSuggestions(match) {
 
 export default function App() {
   const [screen, setScreen] = useState("home");
-  const [section, setSection] = useState("studio");
+  const [section, setSection] = useState("accueil");
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [matches, setMatches] = useState([]);
   const [matchesLoaded, setMatchesLoaded] = useState(false);
   const [currentMatch, setCurrentMatch] = useState(null);
@@ -438,12 +454,69 @@ export default function App() {
   return (
     <div className="app-root">
       <style>{CSS}</style>
-      <div className="section-nav">
-        <button className={`section-tab ${section === "studio" ? "active" : ""}`} onClick={() => setSection("studio")}>Studio</button>
-        <button className={`section-tab ${section === "stats" ? "active" : ""}`} onClick={() => setSection("stats")}>Statistiques</button>
-      </div>
 
+      {!sidebarOpen && (
+        <button className="menu-toggle-btn" onClick={() => setSidebarOpen(true)} aria-label="Ouvrir le menu">
+          <Menu size={18} />
+        </button>
+      )}
+
+      {sidebarOpen && (
+        <>
+          <div className="sidebar-backdrop" onClick={() => setSidebarOpen(false)} />
+          <div className="sidebar-drawer">
+            <div className="sidebar-header">
+              <span className="sidebar-brand">Football Analysis</span>
+              <button className="icon-btn" onClick={() => setSidebarOpen(false)} aria-label="Fermer le menu"><X size={16} /></button>
+            </div>
+            {SECTIONS.map((s) => {
+              const Icon = s.icon;
+              return (
+                <button
+                  key={s.key}
+                  className={`sidebar-item ${section === s.key ? "active" : ""}`}
+                  onClick={() => { setSection(s.key); setSidebarOpen(false); }}
+                >
+                  <Icon size={16} />
+                  {s.label}
+                </button>
+              );
+            })}
+          </div>
+        </>
+      )}
+
+      {section === "accueil" && (
+        <PlaceholderScreen title="Accueil" description="Vue d'ensemble : prochains matchs, dernières notes, raccourcis vers ce qui est en cours." />
+      )}
+      {section === "gameplan" && (
+        <PlaceholderScreen title="Projet de jeu" description="Formalise les principes de ton projet de jeu, phase par phase, pour qu'ils nourrissent la notation et les séances." />
+      )}
+      {section === "squad" && (
+        <PlaceholderScreen title="Effectifs" description="Fiches joueurs : informations, poste, disponibilité, historique." />
+      )}
+      {section === "competitions" && (
+        <PlaceholderScreen title="Compétitions" description="Suivi des championnats et coupes disputés, classements et calendriers." />
+      )}
       {section === "stats" && <StatsScreen matches={matches} />}
+      {section === "sessions" && (
+        <PlaceholderScreen title="Séance" description="Génération de séances d'entraînement adaptées à ton projet de jeu et au prochain adversaire." />
+      )}
+      {section === "reports" && (
+        <PlaceholderScreen title="Rapports de matchs" description="Synthèse partageable d'un match : statistiques, notes et moments clés en un seul document." />
+      )}
+      {section === "observation" && (
+        <PlaceholderScreen title="Observation" description="Rapports de forces/faiblesses sur les adversaires à venir, à partir des matchs observés." />
+      )}
+      {section === "scouting" && (
+        <PlaceholderScreen title="Scouting" description="Notation des joueurs adverses selon ton projet de jeu, en vue d'un recrutement." />
+      )}
+      {section === "videotheque" && (
+        <PlaceholderScreen title="Vidéothèque" description="Toutes les compilations générées, organisées et retrouvables au même endroit." />
+      )}
+      {section === "medical" && (
+        <PlaceholderScreen title="Suivi médical" description="État de forme, blessures en cours et réathlétisation par joueur." />
+      )}
 
       {section === "studio" && (
         <>
@@ -657,6 +730,17 @@ function getPlayerHistory(allMatches, team, player) {
       };
     })
     .filter(Boolean);
+}
+
+function PlaceholderScreen({ title, description }) {
+  return (
+    <div className="placeholder-screen">
+      <div className="eyebrow">Assistant coaching</div>
+      <h1>{title}</h1>
+      <p className="subtitle">{description}</p>
+      <div className="placeholder-badge">Bientôt disponible</div>
+    </div>
+  );
 }
 
 function StatsScreen({ matches }) {
@@ -1525,12 +1609,21 @@ const CSS = `
   .app-root button:focus-visible, .app-root input:focus-visible, .app-root select:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
   @media (prefers-reduced-motion: reduce) { .app-root * { transition: none !important; animation: none !important; } }
 
-  .section-nav { display: flex; gap: 4px; padding: 12px 18px 0; border-bottom: 1px solid var(--line); }
-  .section-tab { background: transparent; border: none; color: var(--ink-muted); font-size: 13px; font-weight: 700; padding: 10px 16px; border-bottom: 2px solid transparent; }
-  .section-tab.active { color: var(--gold); border-bottom-color: var(--gold); }
+  .menu-toggle-btn { position: fixed; top: 14px; left: 14px; z-index: 50; background: var(--surface); border: 1px solid var(--line); color: var(--ink); width: 38px; height: 38px; border-radius: 8px; display: flex; align-items: center; justify-content: center; }
+  .menu-toggle-btn:hover { border-color: var(--gold); }
+  .sidebar-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.55); z-index: 40; }
+  .sidebar-drawer { position: fixed; top: 0; left: 0; bottom: 0; width: 230px; background: #131C17; border-right: 1px solid var(--line); z-index: 45; display: flex; flex-direction: column; padding: 14px 0; overflow-y: auto; }
+  .sidebar-header { display: flex; align-items: center; justify-content: space-between; padding: 0 14px 14px; margin-bottom: 6px; border-bottom: 1px solid var(--line); }
+  .sidebar-brand { font-size: 11px; font-weight: 700; color: var(--gold); text-transform: uppercase; letter-spacing: 0.05em; }
+  .sidebar-item { display: flex; align-items: center; gap: 10px; padding: 10px 16px; color: var(--ink-muted); font-size: 13px; background: transparent; border: none; width: 100%; text-align: left; }
+  .sidebar-item:hover { background: var(--surface); color: var(--ink); }
+  .sidebar-item.active { background: var(--gold); color: var(--gold-ink); font-weight: 700; }
   .stats-screen { padding: 24px 24px 48px; max-width: 1000px; margin: 0 auto; }
   .stats-screen-header { margin-bottom: 20px; }
   .player-select { width: 100%; max-width: 420px; background: var(--surface); border: 1px solid var(--line); color: var(--ink); border-radius: 6px; padding: 8px 10px; font-size: 12px; margin-bottom: 8px; }
+  .placeholder-screen { max-width: 560px; margin: 80px auto; padding: 0 24px; text-align: center; }
+  .placeholder-screen h1 { font-size: 26px; font-weight: 800; margin: 0 0 10px; }
+  .placeholder-badge { display: inline-block; margin-top: 16px; background: var(--surface); border: 1px solid var(--line); color: var(--ink-muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 700; padding: 6px 14px; border-radius: 20px; }
 
   .home { padding: 32px 28px 40px; max-width: 720px; margin: 0 auto; }
   .home-header { margin-bottom: 24px; }
