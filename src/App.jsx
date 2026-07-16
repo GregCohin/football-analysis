@@ -218,6 +218,7 @@ export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [matches, setMatches] = useState([]);
   const [matchesLoaded, setMatchesLoaded] = useState(false);
+  const [roster, setRoster] = useState([]);
   const [currentMatch, setCurrentMatch] = useState(null);
   const [videoUrl, setVideoUrl] = useState(null);
   const [videoDuration, setVideoDuration] = useState(0);
@@ -227,7 +228,7 @@ export default function App() {
   const [activeTeam, setActiveTeam] = useState("us");
   const [saveStatus, setSaveStatus] = useState("saved");
   const [showNewForm, setShowNewForm] = useState(false);
-  const [newMatchForm, setNewMatchForm] = useState({ name: "", opponent: "", date: todayIso() });
+  const [newMatchForm, setNewMatchForm] = useState({ name: "", opponent: "", date: todayIso(), assignments: {} });
   const [lastTagFlash, setLastTagFlash] = useState(null);
   const [videoError, setVideoError] = useState(null);
   const [videoLoading, setVideoLoading] = useState(false);
@@ -245,6 +246,16 @@ export default function App() {
     setMatches(readIndex());
     setMatchesLoaded(true);
   }, []);
+
+  useEffect(() => {
+    if (section !== "studio") return;
+    try {
+      const raw = localStorage.getItem("tf_roster");
+      setRoster(raw ? JSON.parse(raw) : []);
+    } catch (e) {
+      setRoster([]);
+    }
+  }, [section]);
 
   function persistIndexUpdate(match) {
     setMatches((prev) => {
@@ -282,6 +293,7 @@ export default function App() {
       possession: [],
       ratings: {},
       closed: false,
+      playerAssignments: { ...newMatchForm.assignments },
     };
     writeMatch(match);
     persistIndexUpdate(match);
@@ -292,7 +304,7 @@ export default function App() {
     setActiveTeam("us");
     setScreen("tagging");
     setShowNewForm(false);
-    setNewMatchForm({ name: "", opponent: "", date: todayIso() });
+    setNewMatchForm({ name: "", opponent: "", date: todayIso(), assignments: {} });
     setSaveStatus("saved");
     setCompilations([]);
   }
@@ -335,7 +347,7 @@ export default function App() {
     try {
       const raw = localStorage.getItem(matchStorageKey(summary.id));
       const parsed = raw ? JSON.parse(raw) : { ...summary, tags: [] };
-      const match = { ...parsed, tags: parsed.tags || [], possession: parsed.possession || [], ratings: parsed.ratings || {}, closed: !!parsed.closed };
+      const match = { ...parsed, tags: parsed.tags || [], possession: parsed.possession || [], ratings: parsed.ratings || {}, closed: !!parsed.closed, playerAssignments: parsed.playerAssignments || {} };
       setCurrentMatch(match);
       setVideoUrl(null);
       setVideoDuration(0);
@@ -346,6 +358,10 @@ export default function App() {
     } catch (e) {
       alert("Impossible de charger ce match (données corrompues).");
     }
+  }
+
+  function setPlayerAssignments(assignments) {
+    updateMatch((m) => ({ ...m, playerAssignments: assignments }));
   }
 
   function deleteMatch(summary, e) {
@@ -569,6 +585,7 @@ export default function App() {
               openMatch={openMatch}
               deleteMatch={deleteMatch}
               importMatchesFile={importMatchesFile}
+              roster={roster}
             />
           )}
           {screen === "rating" && currentMatch && (
@@ -629,7 +646,43 @@ export default function App() {
   );
 }
 
-function HomeScreen({ matches, matchesLoaded, showNewForm, setShowNewForm, newMatchForm, setNewMatchForm, createMatch, openMatch, deleteMatch, importMatchesFile }) {
+function PlayerAssignmentEditor({ roster, assignments, setAssignments }) {
+  if (roster.length === 0) {
+    return <p className="assignment-empty-note">Aucun joueur dans l'effectif pour l'instant — ajoutes-en depuis l'onglet Effectifs, ou continue sans association (numéros bruts, comme avant).</p>;
+  }
+  const numberByRosterId = {};
+  Object.entries(assignments).forEach(([num, rid]) => { numberByRosterId[rid] = num; });
+
+  function setNumberFor(rosterId, num) {
+    const next = { ...assignments };
+    Object.keys(next).forEach((k) => { if (next[k] === rosterId) delete next[k]; });
+    if (num) next[num] = rosterId;
+    setAssignments(next);
+  }
+
+  return (
+    <div className="assignment-editor">
+      <div className="radar-range-label">Associer un numéro à chaque joueur pour ce match (optionnel)</div>
+      <div className="assignment-list">
+        {roster.map((p) => (
+          <div className="assignment-row" key={p.id}>
+            <span className="assignment-name">{p.name} <span className="assignment-position">({p.position})</span></span>
+            <input
+              type="text"
+              inputMode="numeric"
+              placeholder="N°"
+              className="assignment-number-input"
+              value={numberByRosterId[p.id] || ""}
+              onChange={(e) => setNumberFor(p.id, e.target.value.replace(/[^0-9]/g, "").slice(0, 2))}
+            />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function HomeScreen({ matches, matchesLoaded, showNewForm, setShowNewForm, newMatchForm, setNewMatchForm, createMatch, openMatch, deleteMatch, importMatchesFile, roster }) {
   const importInputRef = useRef(null);
   return (
     <div className="home">
@@ -688,6 +741,11 @@ function HomeScreen({ matches, matchesLoaded, showNewForm, setShowNewForm, newMa
               onChange={(e) => setNewMatchForm((f) => ({ ...f, date: e.target.value }))}
             />
           </label>
+          <PlayerAssignmentEditor
+            roster={roster}
+            assignments={newMatchForm.assignments}
+            setAssignments={(a) => setNewMatchForm((f) => ({ ...f, assignments: a }))}
+          />
           <div className="form-actions">
             <button className="btn btn-ghost" onClick={() => setShowNewForm(false)}>Annuler</button>
             <button className="btn btn-primary" onClick={createMatch}>Commencer le tagging</button>
@@ -790,17 +848,20 @@ function getPlayerHistory(allMatches, team, player) {
 
 const POSITIONS = ["Gardien", "Défenseur", "Milieu", "Attaquant"];
 
-function computePlayerUsageMap(allFullMatches) {
+function computePlayerUsageByRosterId(allFullMatches) {
   const map = {};
   allFullMatches.forEach((m) => {
+    const assignments = m.playerAssignments || {};
     const seenInMatch = new Set();
     m.tags.forEach((t) => {
       if (t.team !== "us" || !t.player) return;
-      if (!map[t.player]) map[t.player] = { matchCount: 0, totalActions: 0 };
-      map[t.player].totalActions++;
-      seenInMatch.add(t.player);
+      const rosterId = assignments[t.player];
+      if (!rosterId) return;
+      if (!map[rosterId]) map[rosterId] = { matchCount: 0, totalActions: 0 };
+      map[rosterId].totalActions++;
+      seenInMatch.add(rosterId);
     });
-    seenInMatch.forEach((num) => { map[num].matchCount++; });
+    seenInMatch.forEach((rid) => { map[rid].matchCount++; });
   });
   return map;
 }
@@ -810,7 +871,7 @@ function RosterScreen({ matches }) {
   const [loaded, setLoaded] = useState(false);
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState(null);
-  const [form, setForm] = useState({ number: "", name: "", position: "Attaquant", birthDate: "", notes: "" });
+  const [form, setForm] = useState({ name: "", position: "Attaquant", birthDate: "", notes: "" });
   const [allFullMatches, setAllFullMatches] = useState([]);
 
   useEffect(() => {
@@ -837,7 +898,7 @@ function RosterScreen({ matches }) {
     setAllFullMatches(full);
   }, [matches]);
 
-  const usageMap = useMemo(() => computePlayerUsageMap(allFullMatches), [allFullMatches]);
+  const usageMap = useMemo(() => computePlayerUsageByRosterId(allFullMatches), [allFullMatches]);
 
   function persist(next) {
     setRoster(next);
@@ -849,46 +910,43 @@ function RosterScreen({ matches }) {
   }
 
   function openNewForm() {
-    setForm({ number: "", name: "", position: "Attaquant", birthDate: "", notes: "" });
+    setForm({ name: "", position: "Attaquant", birthDate: "", notes: "" });
     setEditingId(null);
     setShowForm(true);
   }
 
   function openEditForm(p) {
-    setForm({ number: p.number, name: p.name || "", position: p.position || "Attaquant", birthDate: p.birthDate || "", notes: p.notes || "" });
+    setForm({ name: p.name || "", position: p.position || "Attaquant", birthDate: p.birthDate || "", notes: p.notes || "" });
     setEditingId(p.id);
     setShowForm(true);
   }
 
   function savePlayer() {
-    const number = form.number.trim();
-    if (!number) {
-      alert("Le numéro est obligatoire.");
+    if (!form.name.trim()) {
+      alert("Le nom est obligatoire.");
       return;
     }
     if (editingId) {
-      persist(roster.map((p) => (p.id === editingId ? { ...p, ...form, number } : p)));
+      persist(roster.map((p) => (p.id === editingId ? { ...p, ...form } : p)));
     } else {
-      const dup = roster.some((p) => p.number === number);
-      if (dup && !confirm(`Le numéro ${number} est déjà utilisé par un autre joueur de l'effectif. Continuer quand même ?`)) return;
-      persist([...roster, { id: newId(), ...form, number }]);
+      persist([...roster, { id: newId(), ...form }]);
     }
     setShowForm(false);
   }
 
   function deletePlayer(id) {
-    if (!confirm("Supprimer cette fiche de l'effectif ? (les données déjà taguées dans Studio ne sont pas affectées)")) return;
+    if (!confirm("Supprimer cette fiche de l'effectif ? (les données déjà taguées et les associations déjà faites dans Studio ne sont pas affectées)")) return;
     persist(roster.filter((p) => p.id !== id));
   }
 
-  const sorted = [...roster].sort((a, b) => Number(a.number) - Number(b.number));
+  const sorted = [...roster].sort((a, b) => (a.name || "").localeCompare(b.name || ""));
 
   return (
     <div className="stats-screen">
       <div className="stats-screen-header">
         <div className="eyebrow">Assistant coaching</div>
         <h1>Effectifs</h1>
-        <p className="subtitle">Les fiches de tes joueurs — nom et poste, au-delà du simple numéro utilisé dans Studio.</p>
+        <p className="subtitle">Les fiches de tes joueurs, par nom — le numéro se choisit match par match dans Studio, puisqu'il peut changer.</p>
       </div>
 
       {!showForm && (
@@ -899,10 +957,6 @@ function RosterScreen({ matches }) {
 
       {showForm && (
         <div className="new-match-card">
-          <label>
-            Numéro
-            <input type="text" inputMode="numeric" value={form.number} onChange={(e) => setForm((f) => ({ ...f, number: e.target.value.replace(/[^0-9]/g, "").slice(0, 2) }))} />
-          </label>
           <label>
             Nom
             <input type="text" placeholder="ex. Martin Dubois" value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} />
@@ -934,17 +988,16 @@ function RosterScreen({ matches }) {
 
       <div className="roster-grid">
         {sorted.map((p) => {
-          const usage = usageMap[p.number];
+          const usage = usageMap[p.id];
           return (
             <div className="roster-card" key={p.id}>
-              <div className="roster-card-number">{p.number}</div>
               <div className="roster-card-info">
-                <div className="roster-card-name">{p.name || "Sans nom"}</div>
+                <div className="roster-card-name">{p.name}</div>
                 <div className="roster-card-position">{p.position}</div>
                 {p.birthDate && <div className="roster-card-meta">Né(e) le {formatDateFr(p.birthDate)}</div>}
                 {p.notes && <div className="roster-card-meta">{p.notes}</div>}
                 <div className="roster-card-usage">
-                  {usage ? `${usage.matchCount} match${usage.matchCount > 1 ? "s" : ""} · ${usage.totalActions} actions taguées` : "Aucune action taguée pour l'instant"}
+                  {usage ? `${usage.matchCount} match${usage.matchCount > 1 ? "s" : ""} · ${usage.totalActions} actions taguées` : "Pas encore associé à un numéro sur un match clôturé"}
                 </div>
               </div>
               <div className="roster-card-actions">
@@ -1098,13 +1151,13 @@ function signalsForSeries(series, scope, metricLabel) {
   return out;
 }
 
-function generateAllSignals(matchSummaries, allFullMatches, allPlayers) {
+function generateAllSignals(matchSummaries, allFullMatches, allPlayers, roster) {
   const signals = [];
   signals.push(...signalsForSeries(matchSummaries.map((m) => ({ value: m.teamSuggestUs, date: m.date, matchName: m.name })), "Équipe", "Suggestion"));
   signals.push(...signalsForSeries(matchSummaries.map((m) => ({ value: m.teamCoachUs, date: m.date, matchName: m.name })), "Équipe", "Note du coach"));
   allPlayers.forEach((p) => {
     const hist = getPlayerHistory(allFullMatches, p.team, p.player);
-    const label = `n°${p.player} (${p.team === "us" ? "Nous" : "Adversaire"})`;
+    const label = rosterDisplayLabel(p.player, roster);
     signals.push(...signalsForSeries(hist.map((h) => ({ value: h.suggestion, date: h.date, matchName: h.matchName })), label, "Suggestion"));
     signals.push(...signalsForSeries(hist.map((h) => ({ value: h.coachScore, date: h.date, matchName: h.matchName })), label, "Note du coach"));
   });
@@ -1234,8 +1287,54 @@ function RadarRangeControl({ config, setConfig, allMatches, label }) {
   );
 }
 
+function withResolvedIdentities(allFullMatches, roster) {
+  if (!roster || roster.length === 0) return allFullMatches;
+  const rosterById = {};
+  roster.forEach((r) => { rosterById[r.id] = r; });
+
+  return allFullMatches.map((m) => {
+    const assignments = m.playerAssignments || {};
+    const resolveToken = (num) => {
+      const rid = assignments[num];
+      return rid && rosterById[rid] ? `R${rid}` : num;
+    };
+    const newTags = m.tags.map((t) => {
+      if (t.team !== "us" || !t.player) return t;
+      const token = resolveToken(t.player);
+      return token === t.player ? t : { ...t, player: token };
+    });
+    let newRatingsPlayers = m.ratings && m.ratings.players;
+    if (newRatingsPlayers) {
+      const remapped = {};
+      Object.entries(newRatingsPlayers).forEach(([key, val]) => {
+        const idx = key.indexOf("_");
+        const kTeam = key.slice(0, idx);
+        const kNum = key.slice(idx + 1);
+        if (kTeam === "us") {
+          const token = resolveToken(kNum);
+          remapped[`us_${token}`] = val;
+        } else {
+          remapped[key] = val;
+        }
+      });
+      newRatingsPlayers = remapped;
+    }
+    return { ...m, tags: newTags, ratings: { ...m.ratings, players: newRatingsPlayers || {} } };
+  });
+}
+
+function rosterDisplayLabel(playerToken, roster) {
+  if (typeof playerToken === "string" && playerToken.startsWith("R")) {
+    const id = playerToken.slice(1);
+    const r = roster.find((x) => x.id === id);
+    if (r) return r.name;
+  }
+  return `n°${playerToken}`;
+}
+
 function StatsScreen({ matches }) {
-  const [allFullMatches, setAllFullMatches] = useState([]);
+  const [rawFullMatches, setRawFullMatches] = useState([]);
+  const [roster, setRoster] = useState([]);
   const [loaded, setLoaded] = useState(false);
   const [selectedPlayerKey, setSelectedPlayerKey] = useState("");
   const [statsSubTab, setStatsSubTab] = useState("collectif");
@@ -1244,6 +1343,15 @@ function StatsScreen({ matches }) {
   const [radarMainConfig, setRadarMainConfig] = useState({ mode: "all", matchIds: [] });
   const [radarCompareWith, setRadarCompareWith] = useState("");
   const [radarCompareConfig, setRadarCompareConfig] = useState({ mode: "all", matchIds: [] });
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem("tf_roster");
+      setRoster(raw ? JSON.parse(raw) : []);
+    } catch (e) {
+      setRoster([]);
+    }
+  }, []);
 
   useEffect(() => {
     const full = matches
@@ -1257,9 +1365,13 @@ function StatsScreen({ matches }) {
       })
       .filter((m) => m && m.closed)
       .sort((a, b) => new Date(a.date) - new Date(b.date));
-    setAllFullMatches(full);
+    setRawFullMatches(full);
     setLoaded(true);
   }, [matches]);
+
+  // allFullMatches : version résolue (identité joueur via effectif + associations) — toutes les
+  // fonctions de cette page qui suivent opèrent dessus, exactement comme avant l'ajout de l'effectif.
+  const allFullMatches = useMemo(() => withResolvedIdentities(rawFullMatches, roster), [rawFullMatches, roster]);
 
   const matchSummaries = useMemo(() => allFullMatches.map(summarizeMatchForStats), [allFullMatches]);
   const allPlayers = useMemo(() => getAllPlayersEver(allFullMatches), [allFullMatches]);
@@ -1336,12 +1448,12 @@ function StatsScreen({ matches }) {
   }, [radarMainValues, radarCompareValues, radarAxesUsed]);
 
   const allSignals = useMemo(
-    () => generateAllSignals(matchSummaries, allFullMatches, allPlayers),
-    [matchSummaries, allFullMatches, allPlayers]
+    () => generateAllSignals(matchSummaries, allFullMatches, allPlayers, roster),
+    [matchSummaries, allFullMatches, allPlayers, roster]
   );
   const teamSignals = useMemo(() => allSignals.filter((s) => s.scope === "Équipe"), [allSignals]);
   const individualSignals = useMemo(() => allSignals.filter((s) => s.scope !== "Équipe"), [allSignals]);
-  const currentPlayerLabel = selTeam ? `n°${selPlayer} (${selTeam === "us" ? "Nous" : "Adversaire"})` : null;
+  const currentPlayerLabel = selTeam ? `${rosterDisplayLabel(selPlayer, roster)} (${selTeam === "us" ? "Nous" : "Adversaire"})` : null;
 
   function toggleMatchCompare(id) {
     setCompareMatchIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
@@ -1395,7 +1507,8 @@ function StatsScreen({ matches }) {
     const { last5, rows } = individualComparison;
     const header = ["Action", ...last5.map((m) => m.name), `Moyenne ${last5.length} derniers`, `Moyenne ensemble (${individualComparison.totalMatches})`];
     const csvRows = [header, ...rows.map((r) => [r.event.label, ...r.matchValues, r.avgLast5, r.avgAll])];
-    downloadCSV(`comparaison_n${selPlayer}_${selTeam === "us" ? "nous" : "adversaire"}.csv`, csvRows);
+    const safeName = rosterDisplayLabel(selPlayer, roster).replace(/[^a-zA-Z0-9]+/g, "_");
+    downloadCSV(`comparaison_${safeName}.csv`, csvRows);
   }
 
   return (
@@ -1443,7 +1556,7 @@ function StatsScreen({ matches }) {
                 <h4>Joueur le plus régulier</h4>
                 {seasonHighlights.mostConsistent ? (
                   <>
-                    <div>n°{seasonHighlights.mostConsistent.player}</div>
+                    <div>{rosterDisplayLabel(seasonHighlights.mostConsistent.player, roster)}</div>
                     <div>Moy. {seasonHighlights.mostConsistent.avg}/10 sur {seasonHighlights.mostConsistent.matches} matchs</div>
                   </>
                 ) : (
@@ -1575,7 +1688,7 @@ function StatsScreen({ matches }) {
               <tbody>
                 {squadUsage.map((p) => (
                   <tr key={p.player}>
-                    <td>n°{p.player}</td>
+                    <td>{rosterDisplayLabel(p.player, roster)}</td>
                     <td>{p.matchCount}</td>
                     <td>{p.totalActions}</td>
                     <td>{p.avgPerMatch}</td>
@@ -1594,7 +1707,7 @@ function StatsScreen({ matches }) {
             <option value="">Choisir un joueur…</option>
             {allPlayers.map((p) => (
               <option key={`${p.team}_${p.player}`} value={`${p.team}_${p.player}`}>
-                n°{p.player} ({p.team === "us" ? "Nous" : "Adversaire"}) — {p.matchCount} match{p.matchCount > 1 ? "s" : ""}
+                {rosterDisplayLabel(p.player, roster)} — {p.matchCount} match{p.matchCount > 1 ? "s" : ""}
               </option>
             ))}
           </select>
@@ -1658,7 +1771,7 @@ function StatsScreen({ matches }) {
                 <option value="team_us">Moyenne de l'équipe (Nous)</option>
                 {allPlayers.filter((p) => `${p.team}_${p.player}` !== selectedPlayerKey).map((p) => (
                   <option key={`${p.team}_${p.player}`} value={`${p.team}_${p.player}`}>
-                    n°{p.player}
+                    {rosterDisplayLabel(p.player, roster)}
                   </option>
                 ))}
               </select>
@@ -1676,7 +1789,7 @@ function StatsScreen({ matches }) {
                     <Radar name={currentPlayerLabel} dataKey="main" stroke="#E3B23C" fill="#E3B23C" fillOpacity={0.35} />
                     {radarCompareValues && (
                       <Radar
-                        name={radarCompareWith === "team_us" ? "Nous (moyenne)" : `n°${radarCompareWith.slice(radarCompareWith.indexOf("_") + 1)}`}
+                        name={radarCompareWith === "team_us" ? "Nous (moyenne)" : rosterDisplayLabel(radarCompareWith.slice(radarCompareWith.indexOf("_") + 1), roster)}
                         dataKey="compare"
                         stroke="#D6483F"
                         fill="#D6483F"
@@ -1788,7 +1901,7 @@ function StatsScreen({ matches }) {
               return (
                 <label key={key} className="multi-select-item">
                   <input type="checkbox" checked={comparePlayerKeys.includes(key)} onChange={() => togglePlayerCompare(key)} />
-                  <span className={`team-dot ${p.team}`} /> n°{p.player} ({p.team === "us" ? "Nous" : "Adversaire"}) — {p.matchCount} match{p.matchCount > 1 ? "s" : ""}
+                  <span className={`team-dot ${p.team}`} /> {rosterDisplayLabel(p.player, roster)} — {p.matchCount} match{p.matchCount > 1 ? "s" : ""}
                 </label>
               );
             })}
@@ -1806,7 +1919,7 @@ function StatsScreen({ matches }) {
                   const avg = (arr) => (arr.length > 0 ? Math.round((arr.reduce((a, b) => a + b, 0) / arr.length) * 10) / 10 : null);
                   return (
                     <div className="comparison-summary-card" key={p.key}>
-                      <h4>n°{p.player} ({p.team === "us" ? "Nous" : "Adversaire"})</h4>
+                      <h4>{rosterDisplayLabel(p.player, roster)}</h4>
                       <div>{hist.length} match{hist.length > 1 ? "s" : ""}</div>
                       <div>Moy. suggestion : {avg(sugg) != null ? `${avg(sugg)}/10` : "—"}</div>
                       <div>Moy. note coach : {avg(coach) != null ? `${avg(coach)}/10` : "—"}</div>
@@ -1817,7 +1930,7 @@ function StatsScreen({ matches }) {
               <div className="table-scroll">
                 <table className="stat-table">
                   <thead>
-                    <tr><th>Action (moyenne/match)</th>{selectedPlayersForCompare.map((p) => <th key={p.key}>n°{p.player} ({p.team === "us" ? "N" : "A"})</th>)}</tr>
+                    <tr><th>Action (moyenne/match)</th>{selectedPlayersForCompare.map((p) => <th key={p.key}>{rosterDisplayLabel(p.player, roster)}</th>)}</tr>
                   </thead>
                   <tbody>
                     {playerCompareRows.map((r) => {
@@ -2704,6 +2817,13 @@ const CSS = `
   .roster-card-meta { font-size: 11px; color: var(--ink-muted); margin-top: 3px; }
   .roster-card-usage { font-size: 10px; color: var(--ink-muted); margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); }
   .roster-card-actions { display: flex; flex-direction: column; gap: 6px; align-items: flex-end; }
+  .assignment-editor { margin-top: 4px; }
+  .assignment-empty-note { font-size: 12px; color: var(--ink-muted); margin-top: 4px; }
+  .assignment-list { display: flex; flex-direction: column; gap: 6px; max-height: 240px; overflow-y: auto; margin-top: 6px; }
+  .assignment-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; }
+  .assignment-name { font-size: 13px; color: var(--ink); }
+  .assignment-position { font-size: 11px; color: var(--ink-muted); font-weight: 400; }
+  .assignment-number-input { width: 48px; background: var(--surface); border: 1px solid var(--line); color: var(--gold); font-weight: 800; text-align: center; border-radius: 6px; padding: 6px; font-size: 13px; }
 
   .match-list { margin-top: 24px; display: flex; flex-direction: column; gap: 10px; }
   .empty-state { color: var(--ink-muted); font-size: 13px; padding: 24px; text-align: center; border: 1px dashed var(--line); border-radius: 8px; }
