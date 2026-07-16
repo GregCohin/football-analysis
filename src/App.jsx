@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from "recharts";
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, ReferenceLine } from "recharts";
 import { Play, Pause, ArrowLeft, X, Download, Video as VideoIcon, Film, Menu, Home, Target, Users, Trophy, BarChart, ClipboardList, FileText, Eye, Search, Activity } from "lucide-react";
 import { generateCompilation } from "./videoCompiler";
 
@@ -773,11 +773,29 @@ function buildIndividualComparison(closedMatches, team, player) {
   return { last5, rows, totalMatches: matchesWithPlayer.length };
 }
 
+function BarCell({ value, max, color }) {
+  const pct = max > 0 ? Math.max(value > 0 ? 6 : 0, Math.round((value / max) * 100)) : 0;
+  return (
+    <div className="bar-cell-wrap">
+      <div className="bar-cell-track">
+        <div className="bar-cell-fill" style={{ height: `${pct}%`, background: color || "var(--gold)" }} />
+      </div>
+      <span className="bar-cell-num">{value}</span>
+    </div>
+  );
+}
+
+function rowMax(values) {
+  return values.reduce((m, v) => (v > m ? v : m), 0);
+}
+
 function StatsScreen({ matches }) {
   const [allFullMatches, setAllFullMatches] = useState([]);
   const [loaded, setLoaded] = useState(false);
   const [selectedPlayerKey, setSelectedPlayerKey] = useState("");
   const [statsSubTab, setStatsSubTab] = useState("collectif");
+  const [compareMatchIds, setCompareMatchIds] = useState([]);
+  const [comparePlayerKeys, setComparePlayerKeys] = useState([]);
 
   useEffect(() => {
     const full = matches
@@ -807,6 +825,52 @@ function StatsScreen({ matches }) {
     () => (selTeam ? buildIndividualComparison(allFullMatches, selTeam, selPlayer) : null),
     [allFullMatches, selTeam, selPlayer]
   );
+  const playerOverallAvg = useMemo(() => {
+    const sugg = playerHistory.map((h) => h.suggestion).filter((v) => v != null);
+    const coach = playerHistory.map((h) => h.coachScore).filter((v) => v != null);
+    const avg = (arr) => (arr.length > 0 ? Math.round((arr.reduce((a, b) => a + b, 0) / arr.length) * 10) / 10 : null);
+    return { suggestion: avg(sugg), coachScore: avg(coach) };
+  }, [playerHistory]);
+
+  function toggleMatchCompare(id) {
+    setCompareMatchIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  }
+  function togglePlayerCompare(key) {
+    setComparePlayerKeys((prev) => (prev.includes(key) ? prev.filter((x) => x !== key) : [...prev, key]));
+  }
+
+  const selectedMatchesForCompare = useMemo(
+    () => allFullMatches.filter((m) => compareMatchIds.includes(m.id)),
+    [allFullMatches, compareMatchIds]
+  );
+  const matchCompareRows = useMemo(() => {
+    if (selectedMatchesForCompare.length < 2) return [];
+    return ALL_EVENTS.map((ev) => ({
+      event: ev,
+      values: selectedMatchesForCompare.map((m) => m.tags.filter((t) => t.eventKey === ev.key && t.team === "us").length),
+    }));
+  }, [selectedMatchesForCompare]);
+
+  const selectedPlayersForCompare = useMemo(
+    () => comparePlayerKeys.map((key) => {
+      const idx = key.indexOf("_");
+      return { key, team: key.slice(0, idx), player: key.slice(idx + 1) };
+    }),
+    [comparePlayerKeys]
+  );
+  const playerCompareRows = useMemo(() => {
+    if (selectedPlayersForCompare.length < 2) return [];
+    const perPlayerMatches = selectedPlayersForCompare.map((p) =>
+      allFullMatches.filter((m) => m.tags.some((t) => t.team === p.team && t.player === p.player))
+    );
+    return ALL_EVENTS.map((ev) => ({
+      event: ev,
+      values: selectedPlayersForCompare.map((p, i) => {
+        const counts = perPlayerMatches[i].map((m) => m.tags.filter((t) => t.eventKey === ev.key && t.team === p.team && t.player === p.player).length);
+        return counts.length > 0 ? Math.round((counts.reduce((a, b) => a + b, 0) / counts.length) * 10) / 10 : 0;
+      }),
+    }));
+  }, [selectedPlayersForCompare, allFullMatches]);
 
   function downloadCollectiveComparison() {
     const { last5, rows } = collectiveComparison;
@@ -835,6 +899,8 @@ function StatsScreen({ matches }) {
         <div className="tabs">
           <button className={`tab ${statsSubTab === "collectif" ? "active" : ""}`} onClick={() => setStatsSubTab("collectif")}>Collectif</button>
           <button className={`tab ${statsSubTab === "individuel" ? "active" : ""}`} onClick={() => setStatsSubTab("individuel")}>Individuel</button>
+          <button className={`tab ${statsSubTab === "comparematch" ? "active" : ""}`} onClick={() => setStatsSubTab("comparematch")}>Comparaison match</button>
+          <button className={`tab ${statsSubTab === "compareplayer" ? "active" : ""}`} onClick={() => setStatsSubTab("compareplayer")}>Comparaison joueur</button>
         </div>
       )}
 
@@ -897,14 +963,17 @@ function StatsScreen({ matches }) {
                 </tr>
               </thead>
               <tbody>
-                {collectiveComparison.rows.map((r) => (
-                  <tr key={r.event.key}>
-                    <td>{r.event.label}</td>
-                    {r.matchValues.map((v, i) => <td key={i}>{v}</td>)}
-                    <td>{r.avgLast5}</td>
-                    <td>{r.avgAll}</td>
-                  </tr>
-                ))}
+                {collectiveComparison.rows.map((r) => {
+                  const max = rowMax([...r.matchValues, r.avgLast5, r.avgAll]);
+                  return (
+                    <tr key={r.event.key}>
+                      <td>{r.event.label}</td>
+                      {r.matchValues.map((v, i) => <td key={i}><BarCell value={v} max={max} /></td>)}
+                      <td><BarCell value={r.avgLast5} max={max} color="var(--ink-muted)" /></td>
+                      <td><BarCell value={r.avgAll} max={max} color="var(--crimson)" /></td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -926,6 +995,12 @@ function StatsScreen({ matches }) {
           {selectedPlayerKey && playerHistory.length > 0 && (
             <>
               <div className="panel-heading" style={{ marginTop: 16 }}>Évolution du joueur</div>
+              {(playerOverallAvg.suggestion != null || playerOverallAvg.coachScore != null) && (
+                <div className="player-avg-summary">
+                  {playerOverallAvg.suggestion != null && <span>Moyenne suggestion (ensemble) : <strong>{playerOverallAvg.suggestion}/10</strong></span>}
+                  {playerOverallAvg.coachScore != null && <span>Moyenne note du coach (ensemble) : <strong>{playerOverallAvg.coachScore}/10</strong></span>}
+                </div>
+              )}
               <div className="chart-wrap">
                 <ResponsiveContainer width="100%" height={220}>
                   <LineChart data={playerHistory} margin={{ top: 10, right: 20, left: -10, bottom: 0 }}>
@@ -934,6 +1009,12 @@ function StatsScreen({ matches }) {
                     <YAxis domain={[0, 10]} stroke="#8FA599" fontSize={10} allowDecimals={false} />
                     <Tooltip contentStyle={{ background: "#182A21", border: "1px solid #26362C", borderRadius: 6, color: "#EEF3EC" }} />
                     <Legend wrapperStyle={{ fontSize: 11 }} />
+                    {playerOverallAvg.suggestion != null && (
+                      <ReferenceLine y={playerOverallAvg.suggestion} stroke="#E3B23C" strokeDasharray="4 4" strokeWidth={1.5} label={{ value: `Moy. ${playerOverallAvg.suggestion}`, fontSize: 9, fill: "#E3B23C", position: "insideTopLeft" }} />
+                    )}
+                    {playerOverallAvg.coachScore != null && (
+                      <ReferenceLine y={playerOverallAvg.coachScore} stroke="#D6483F" strokeDasharray="4 4" strokeWidth={1.5} label={{ value: `Moy. ${playerOverallAvg.coachScore}`, fontSize: 9, fill: "#D6483F", position: "insideBottomLeft" }} />
+                    )}
                     <Line type="monotone" dataKey="suggestion" name="Suggestion" stroke="#E3B23C" strokeWidth={2} dot={{ r: 3 }} connectNulls />
                     <Line type="monotone" dataKey="coachScore" name="Note du coach" stroke="#D6483F" strokeWidth={2} dot={{ r: 3 }} connectNulls />
                   </LineChart>
@@ -975,14 +1056,128 @@ function StatsScreen({ matches }) {
                     </tr>
                   </thead>
                   <tbody>
-                    {individualComparison.rows.map((r) => (
-                      <tr key={r.event.key}>
-                        <td>{r.event.label}</td>
-                        {r.matchValues.map((v, i) => <td key={i}>{v}</td>)}
-                        <td>{r.avgLast5}</td>
-                        <td>{r.avgAll}</td>
-                      </tr>
-                    ))}
+                    {individualComparison.rows.map((r) => {
+                      const max = rowMax([...r.matchValues, r.avgLast5, r.avgAll]);
+                      return (
+                        <tr key={r.event.key}>
+                          <td>{r.event.label}</td>
+                          {r.matchValues.map((v, i) => <td key={i}><BarCell value={v} max={max} /></td>)}
+                          <td><BarCell value={r.avgLast5} max={max} color="var(--ink-muted)" /></td>
+                          <td><BarCell value={r.avgAll} max={max} color="var(--crimson)" /></td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
+        </>
+      )}
+
+      {matchSummaries.length > 0 && statsSubTab === "comparematch" && (
+        <>
+          <div className="panel-heading">Choisir 2 matchs ou plus à comparer</div>
+          <div className="multi-select-list">
+            {allFullMatches.slice().reverse().map((m) => (
+              <label key={m.id} className="multi-select-item">
+                <input type="checkbox" checked={compareMatchIds.includes(m.id)} onChange={() => toggleMatchCompare(m.id)} />
+                {m.name} — {formatDateFr(m.date)} (vs {m.opponent})
+              </label>
+            ))}
+          </div>
+
+          {selectedMatchesForCompare.length < 2 && <div className="empty-state">Sélectionne au moins 2 matchs pour afficher la comparaison.</div>}
+
+          {selectedMatchesForCompare.length >= 2 && (
+            <>
+              <div className="comparison-summary-row">
+                {selectedMatchesForCompare.map((m) => {
+                  const s = summarizeMatchForStats(m);
+                  return (
+                    <div className="comparison-summary-card" key={m.id}>
+                      <h4>{m.name}</h4>
+                      <div>{formatDateFr(m.date)} · vs {m.opponent}</div>
+                      <div>Score : {s.goalsUs} - {s.goalsOpp}</div>
+                      <div>Possession : {s.possUs != null ? `${s.possUs}%` : "—"}</div>
+                      <div>Suggestion : {s.teamSuggestUs}/10</div>
+                    </div>
+                  );
+                })}
+              </div>
+              <div className="table-scroll">
+                <table className="stat-table">
+                  <thead>
+                    <tr><th>Action</th>{selectedMatchesForCompare.map((m) => <th key={m.id}>{m.name}</th>)}</tr>
+                  </thead>
+                  <tbody>
+                    {matchCompareRows.map((r) => {
+                      const max = rowMax(r.values);
+                      return (
+                        <tr key={r.event.key}>
+                          <td>{r.event.label}</td>
+                          {r.values.map((v, i) => <td key={i}><BarCell value={v} max={max} /></td>)}
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
+        </>
+      )}
+
+      {matchSummaries.length > 0 && statsSubTab === "compareplayer" && (
+        <>
+          <div className="panel-heading">Choisir 2 joueurs ou plus à comparer</div>
+          <div className="multi-select-list">
+            {allPlayers.map((p) => {
+              const key = `${p.team}_${p.player}`;
+              return (
+                <label key={key} className="multi-select-item">
+                  <input type="checkbox" checked={comparePlayerKeys.includes(key)} onChange={() => togglePlayerCompare(key)} />
+                  <span className={`team-dot ${p.team}`} /> n°{p.player} ({p.team === "us" ? "Nous" : "Adversaire"}) — {p.matchCount} match{p.matchCount > 1 ? "s" : ""}
+                </label>
+              );
+            })}
+          </div>
+
+          {selectedPlayersForCompare.length < 2 && <div className="empty-state">Sélectionne au moins 2 joueurs pour afficher la comparaison (moyennes par match).</div>}
+
+          {selectedPlayersForCompare.length >= 2 && (
+            <>
+              <div className="comparison-summary-row">
+                {selectedPlayersForCompare.map((p) => {
+                  const hist = getPlayerHistory(allFullMatches, p.team, p.player);
+                  const sugg = hist.map((h) => h.suggestion).filter((v) => v != null);
+                  const coach = hist.map((h) => h.coachScore).filter((v) => v != null);
+                  const avg = (arr) => (arr.length > 0 ? Math.round((arr.reduce((a, b) => a + b, 0) / arr.length) * 10) / 10 : null);
+                  return (
+                    <div className="comparison-summary-card" key={p.key}>
+                      <h4>n°{p.player} ({p.team === "us" ? "Nous" : "Adversaire"})</h4>
+                      <div>{hist.length} match{hist.length > 1 ? "s" : ""}</div>
+                      <div>Moy. suggestion : {avg(sugg) != null ? `${avg(sugg)}/10` : "—"}</div>
+                      <div>Moy. note coach : {avg(coach) != null ? `${avg(coach)}/10` : "—"}</div>
+                    </div>
+                  );
+                })}
+              </div>
+              <div className="table-scroll">
+                <table className="stat-table">
+                  <thead>
+                    <tr><th>Action (moyenne/match)</th>{selectedPlayersForCompare.map((p) => <th key={p.key}>n°{p.player} ({p.team === "us" ? "N" : "A"})</th>)}</tr>
+                  </thead>
+                  <tbody>
+                    {playerCompareRows.map((r) => {
+                      const max = rowMax(r.values);
+                      return (
+                        <tr key={r.event.key}>
+                          <td>{r.event.label}</td>
+                          {r.values.map((v, i) => <td key={i}><BarCell value={v} max={max} /></td>)}
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -1752,6 +1947,19 @@ const CSS = `
   .stats-screen { padding: 24px 24px 48px; max-width: 1000px; margin: 0 auto; }
   .stats-screen-header { margin-bottom: 20px; }
   .player-select { width: 100%; max-width: 420px; background: var(--surface); border: 1px solid var(--line); color: var(--ink); border-radius: 6px; padding: 8px 10px; font-size: 12px; margin-bottom: 8px; }
+  .bar-cell-wrap { display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 4px 0; }
+  .bar-cell-track { height: 42px; width: 22px; display: flex; align-items: flex-end; background: rgba(255,255,255,0.03); border-radius: 3px; overflow: hidden; }
+  .bar-cell-fill { width: 100%; border-radius: 2px 2px 0 0; min-height: 2px; opacity: 0.85; }
+  .bar-cell-num { font-size: 10px; color: var(--ink-muted); font-variant-numeric: tabular-nums; }
+  .multi-select-list { display: flex; flex-direction: column; gap: 2px; max-height: 220px; overflow-y: auto; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 8px; margin-bottom: 12px; }
+  .multi-select-item { display: flex; align-items: center; gap: 8px; padding: 6px 8px; font-size: 12px; color: var(--ink); border-radius: 5px; }
+  .multi-select-item:hover { background: var(--bg); }
+  .comparison-summary-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 16px; }
+  .comparison-summary-card { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; }
+  .comparison-summary-card h4 { margin: 0 0 6px; font-size: 12px; font-weight: 700; }
+  .comparison-summary-card div { font-size: 11px; color: var(--ink-muted); margin-bottom: 2px; }
+  .player-avg-summary { display: flex; gap: 18px; flex-wrap: wrap; font-size: 12px; color: var(--ink-muted); margin-bottom: 10px; }
+  .player-avg-summary strong { color: var(--ink); }
   .placeholder-screen { max-width: 560px; margin: 80px auto; padding: 0 24px; text-align: center; }
   .placeholder-screen h1 { font-size: 26px; font-weight: 800; margin: 0 0 10px; }
   .placeholder-badge { display: inline-block; margin-top: 16px; background: var(--surface); border: 1px solid var(--line); color: var(--ink-muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 700; padding: 6px 14px; border-radius: 20px; }
