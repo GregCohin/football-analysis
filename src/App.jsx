@@ -549,9 +549,7 @@ export default function App() {
         <PlaceholderScreen title="Projet de jeu" description="Formalise les principes de ton projet de jeu, phase par phase, pour qu'ils nourrissent la notation et les séances." />
       )}
       {section === "squad" && <RosterScreen matches={matches} />}
-      {section === "competitions" && (
-        <PlaceholderScreen title="Compétitions" description="Suivi des championnats et coupes disputés, classements et calendriers." />
-      )}
+      {section === "competitions" && <CompetitionsScreen />}
       {section === "stats" && <StatsScreen matches={matches} />}
       {section === "sessions" && (
         <PlaceholderScreen title="Séance" description="Génération de séances d'entraînement adaptées à ton projet de jeu et au prochain adversaire." />
@@ -1324,6 +1322,357 @@ function RosterScreen({ matches }) {
           );
         })}
       </div>
+    </div>
+  );
+}
+
+function emptyCompetitionsData() {
+  return {
+    preparation: { fixtures: [] },
+    championnat: { fixtures: [], standings: [], lastMatchdayLabel: "", lastMatchday: [], nextMatchdayLabel: "", nextMatchday: [] },
+    coupes: { fixtures: [], prevRoundLabel: "", prevRound: [], nextRoundLabel: "", nextRound: [] },
+  };
+}
+
+function fixtureIsPlayed(f) {
+  return f.ourScore !== "" && f.ourScore != null && f.theirScore !== "" && f.theirScore != null;
+}
+
+function NextMatchCard({ fixtures }) {
+  const upcoming = fixtures
+    .filter((f) => !fixtureIsPlayed(f))
+    .sort((a, b) => new Date(a.date) - new Date(b.date))[0];
+  return (
+    <div className="panel-section">
+      <div className="panel-heading">Prochain match</div>
+      {!upcoming && <div className="empty-state">Aucun prochain match programmé.</div>}
+      {upcoming && (
+        <div className="comparison-summary-card" style={{ maxWidth: 320 }}>
+          <h4>vs {upcoming.opponent}</h4>
+          <div>{formatDateFr(upcoming.date)} · {upcoming.venue}</div>
+          {upcoming.label && <div>{upcoming.label}</div>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function FixtureList({ fixtures, setFixtures }) {
+  const [showAdd, setShowAdd] = useState(false);
+  const [draft, setDraft] = useState({ date: todayIso(), opponent: "", venue: "Domicile", ourScore: "", theirScore: "", label: "" });
+
+  function addFixture() {
+    if (!draft.opponent.trim()) {
+      alert("L'adversaire est obligatoire.");
+      return;
+    }
+    setFixtures([...fixtures, { id: newId(), ...draft, opponent: draft.opponent.trim() }]);
+    setDraft({ date: todayIso(), opponent: "", venue: "Domicile", ourScore: "", theirScore: "", label: "" });
+    setShowAdd(false);
+  }
+  function removeFixture(id) {
+    setFixtures(fixtures.filter((f) => f.id !== id));
+  }
+  function updateField(id, field, value) {
+    setFixtures(fixtures.map((f) => (f.id === id ? { ...f, [field]: value } : f)));
+  }
+
+  const sorted = [...fixtures].sort((a, b) => new Date(a.date) - new Date(b.date));
+
+  return (
+    <div>
+      <div className="range-filter-header">
+        <div className="panel-heading" style={{ marginBottom: 0 }}>Calendrier complet</div>
+        <button className="btn btn-ghost btn-small" onClick={() => setShowAdd((v) => !v)}>+ Ajouter un match</button>
+      </div>
+      {showAdd && (
+        <div className="new-match-card" style={{ marginTop: 0, marginBottom: 14 }}>
+          <label>Date<input type="date" value={draft.date} onChange={(e) => setDraft((d) => ({ ...d, date: e.target.value }))} /></label>
+          <label>Adversaire<input type="text" placeholder="ex. FC Rival" value={draft.opponent} onChange={(e) => setDraft((d) => ({ ...d, opponent: e.target.value }))} /></label>
+          <label>
+            Lieu
+            <select value={draft.venue} onChange={(e) => setDraft((d) => ({ ...d, venue: e.target.value }))}>
+              <option>Domicile</option><option>Extérieur</option><option>Neutre</option>
+            </select>
+          </label>
+          <label>Journée / Tour (optionnel)<input type="text" placeholder="ex. J8 ou 8e de finale" value={draft.label} onChange={(e) => setDraft((d) => ({ ...d, label: e.target.value }))} /></label>
+          <div className="form-actions">
+            <button className="btn btn-ghost" onClick={() => setShowAdd(false)}>Annuler</button>
+            <button className="btn btn-primary" onClick={addFixture}>Ajouter</button>
+          </div>
+        </div>
+      )}
+      <div className="table-scroll">
+        <table className="stat-table">
+          <thead><tr><th>Date</th><th>Adversaire</th><th>Lieu</th><th>Score</th><th>Journée/Tour</th><th></th></tr></thead>
+          <tbody>
+            {sorted.map((f) => (
+              <tr key={f.id}>
+                <td>{formatDateFr(f.date)}</td>
+                <td>{f.opponent}</td>
+                <td>{f.venue}</td>
+                <td>
+                  <input className="score-input" type="number" placeholder="-" value={f.ourScore} onChange={(e) => updateField(f.id, "ourScore", e.target.value)} />
+                  {" - "}
+                  <input className="score-input" type="number" placeholder="-" value={f.theirScore} onChange={(e) => updateField(f.id, "theirScore", e.target.value)} />
+                </td>
+                <td>{f.label}</td>
+                <td><button className="icon-btn" onClick={() => removeFixture(f.id)} aria-label="Supprimer"><X size={12} /></button></td>
+              </tr>
+            ))}
+            {sorted.length === 0 && <tr><td colSpan={6} className="empty-state">Aucun match enregistré.</td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function StandingsTable({ standings, setStandings }) {
+  const [showAdd, setShowAdd] = useState(false);
+  const [draftTeam, setDraftTeam] = useState("");
+
+  function addTeam() {
+    if (!draftTeam.trim()) {
+      alert("Le nom de l'équipe est obligatoire.");
+      return;
+    }
+    setStandings([...standings, { id: newId(), team: draftTeam.trim(), played: 0, wins: 0, draws: 0, losses: 0, goalsFor: 0, goalsAgainst: 0 }]);
+    setDraftTeam("");
+    setShowAdd(false);
+  }
+  function removeTeam(id) {
+    setStandings(standings.filter((t) => t.id !== id));
+  }
+  function updateField(id, field, value) {
+    setStandings(standings.map((t) => (t.id === id ? { ...t, [field]: value } : t)));
+  }
+
+  const withStats = standings.map((t) => ({
+    ...t,
+    points: Number(t.wins || 0) * 3 + Number(t.draws || 0),
+    gd: Number(t.goalsFor || 0) - Number(t.goalsAgainst || 0),
+  }));
+  const sorted = [...withStats].sort((a, b) => b.points - a.points || b.gd - a.gd || (Number(b.goalsFor) || 0) - (Number(a.goalsFor) || 0));
+
+  return (
+    <div>
+      <div className="range-filter-header">
+        <div className="panel-heading" style={{ marginBottom: 0 }}>Classement</div>
+        <button className="btn btn-ghost btn-small" onClick={() => setShowAdd((v) => !v)}>+ Ajouter une équipe</button>
+      </div>
+      {showAdd && (
+        <div className="new-match-card" style={{ marginTop: 0, marginBottom: 14 }}>
+          <label>Équipe<input type="text" placeholder="ex. FC Rival" value={draftTeam} onChange={(e) => setDraftTeam(e.target.value)} /></label>
+          <div className="form-actions">
+            <button className="btn btn-ghost" onClick={() => setShowAdd(false)}>Annuler</button>
+            <button className="btn btn-primary" onClick={addTeam}>Ajouter</button>
+          </div>
+        </div>
+      )}
+      <div className="table-scroll">
+        <table className="stat-table">
+          <thead><tr><th>#</th><th>Équipe</th><th>J</th><th>G</th><th>N</th><th>P</th><th>BP</th><th>BC</th><th>Diff</th><th>Pts</th><th></th></tr></thead>
+          <tbody>
+            {sorted.map((t, i) => (
+              <tr key={t.id}>
+                <td>{i + 1}</td>
+                <td>{t.team}</td>
+                <td><input className="score-input" type="number" value={t.played} onChange={(e) => updateField(t.id, "played", e.target.value)} /></td>
+                <td><input className="score-input" type="number" value={t.wins} onChange={(e) => updateField(t.id, "wins", e.target.value)} /></td>
+                <td><input className="score-input" type="number" value={t.draws} onChange={(e) => updateField(t.id, "draws", e.target.value)} /></td>
+                <td><input className="score-input" type="number" value={t.losses} onChange={(e) => updateField(t.id, "losses", e.target.value)} /></td>
+                <td><input className="score-input" type="number" value={t.goalsFor} onChange={(e) => updateField(t.id, "goalsFor", e.target.value)} /></td>
+                <td><input className="score-input" type="number" value={t.goalsAgainst} onChange={(e) => updateField(t.id, "goalsAgainst", e.target.value)} /></td>
+                <td>{t.gd}</td>
+                <td><strong>{t.points}</strong></td>
+                <td><button className="icon-btn" onClick={() => removeTeam(t.id)} aria-label="Supprimer"><X size={12} /></button></td>
+              </tr>
+            ))}
+            {sorted.length === 0 && <tr><td colSpan={11} className="empty-state">Aucune équipe enregistrée.</td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function RoundMatches({ title, label, setLabel, matches, setMatches }) {
+  const [showAdd, setShowAdd] = useState(false);
+  const [draft, setDraft] = useState({ home: "", away: "", homeScore: "", awayScore: "" });
+
+  function addMatch() {
+    if (!draft.home.trim() || !draft.away.trim()) {
+      alert("Les deux équipes sont obligatoires.");
+      return;
+    }
+    setMatches([...matches, { id: newId(), ...draft }]);
+    setDraft({ home: "", away: "", homeScore: "", awayScore: "" });
+    setShowAdd(false);
+  }
+  function removeMatch(id) {
+    setMatches(matches.filter((m) => m.id !== id));
+  }
+  function updateScore(id, field, value) {
+    setMatches(matches.map((m) => (m.id === id ? { ...m, [field]: value } : m)));
+  }
+
+  return (
+    <div>
+      <div className="range-filter-header">
+        <div className="panel-heading" style={{ marginBottom: 0 }}>{title}</div>
+        <button className="btn btn-ghost btn-small" onClick={() => setShowAdd((v) => !v)}>+ Ajouter un match</button>
+      </div>
+      <input
+        className="player-select"
+        style={{ maxWidth: 280 }}
+        type="text"
+        placeholder="ex. Journée 12 ou 8e de finale"
+        value={label}
+        onChange={(e) => setLabel(e.target.value)}
+      />
+      {showAdd && (
+        <div className="new-match-card" style={{ marginTop: 10, marginBottom: 14 }}>
+          <label>Équipe à domicile<input type="text" value={draft.home} onChange={(e) => setDraft((d) => ({ ...d, home: e.target.value }))} /></label>
+          <label>Équipe à l'extérieur<input type="text" value={draft.away} onChange={(e) => setDraft((d) => ({ ...d, away: e.target.value }))} /></label>
+          <div className="form-actions">
+            <button className="btn btn-ghost" onClick={() => setShowAdd(false)}>Annuler</button>
+            <button className="btn btn-primary" onClick={addMatch}>Ajouter</button>
+          </div>
+        </div>
+      )}
+      <div className="table-scroll">
+        <table className="stat-table">
+          <thead><tr><th>Domicile</th><th>Score</th><th>Extérieur</th><th></th></tr></thead>
+          <tbody>
+            {matches.map((m) => (
+              <tr key={m.id}>
+                <td>{m.home}</td>
+                <td>
+                  <input className="score-input" type="number" placeholder="-" value={m.homeScore} onChange={(e) => updateScore(m.id, "homeScore", e.target.value)} />
+                  {" - "}
+                  <input className="score-input" type="number" placeholder="-" value={m.awayScore} onChange={(e) => updateScore(m.id, "awayScore", e.target.value)} />
+                </td>
+                <td>{m.away}</td>
+                <td><button className="icon-btn" onClick={() => removeMatch(m.id)} aria-label="Supprimer"><X size={12} /></button></td>
+              </tr>
+            ))}
+            {matches.length === 0 && <tr><td colSpan={4} className="empty-state">Aucun match enregistré pour cette période.</td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function CompetitionsScreen() {
+  const [data, setData] = useState(emptyCompetitionsData());
+  const [loaded, setLoaded] = useState(false);
+  const [subTab, setSubTab] = useState("preparation");
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem("tf_competitions");
+      setData(raw ? { ...emptyCompetitionsData(), ...JSON.parse(raw) } : emptyCompetitionsData());
+    } catch (e) {
+      setData(emptyCompetitionsData());
+    }
+    setLoaded(true);
+  }, []);
+
+  function update(category, field, value) {
+    setData((prev) => {
+      const next = { ...prev, [category]: { ...prev[category], [field]: value } };
+      try {
+        localStorage.setItem("tf_competitions", JSON.stringify(next));
+      } catch (e) {
+        alert("La sauvegarde a échoué.");
+      }
+      return next;
+    });
+  }
+
+  if (!loaded) {
+    return <div className="stats-screen"><div className="empty-state">Chargement…</div></div>;
+  }
+
+  return (
+    <div className="stats-screen">
+      <div className="stats-screen-header">
+        <div className="eyebrow">Assistant coaching</div>
+        <h1>Compétitions</h1>
+        <p className="subtitle">Calendrier, résultats et classement de tes matchs de préparation, championnat et coupes.</p>
+      </div>
+
+      <div className="tabs">
+        <button className={`tab ${subTab === "preparation" ? "active" : ""}`} onClick={() => setSubTab("preparation")}>Matchs de préparation</button>
+        <button className={`tab ${subTab === "championnat" ? "active" : ""}`} onClick={() => setSubTab("championnat")}>Championnat</button>
+        <button className={`tab ${subTab === "coupes" ? "active" : ""}`} onClick={() => setSubTab("coupes")}>Coupes</button>
+      </div>
+
+      {subTab === "preparation" && (
+        <>
+          <NextMatchCard fixtures={data.preparation.fixtures} />
+          <FixtureList fixtures={data.preparation.fixtures} setFixtures={(v) => update("preparation", "fixtures", v)} />
+        </>
+      )}
+
+      {subTab === "championnat" && (
+        <>
+          <NextMatchCard fixtures={data.championnat.fixtures} />
+          <div style={{ marginTop: 20 }}>
+            <StandingsTable standings={data.championnat.standings} setStandings={(v) => update("championnat", "standings", v)} />
+          </div>
+          <div style={{ marginTop: 20 }}>
+            <RoundMatches
+              title="Dernière journée jouée"
+              label={data.championnat.lastMatchdayLabel}
+              setLabel={(v) => update("championnat", "lastMatchdayLabel", v)}
+              matches={data.championnat.lastMatchday}
+              setMatches={(v) => update("championnat", "lastMatchday", v)}
+            />
+          </div>
+          <div style={{ marginTop: 20 }}>
+            <RoundMatches
+              title="Journée à venir"
+              label={data.championnat.nextMatchdayLabel}
+              setLabel={(v) => update("championnat", "nextMatchdayLabel", v)}
+              matches={data.championnat.nextMatchday}
+              setMatches={(v) => update("championnat", "nextMatchday", v)}
+            />
+          </div>
+          <div style={{ marginTop: 20 }}>
+            <FixtureList fixtures={data.championnat.fixtures} setFixtures={(v) => update("championnat", "fixtures", v)} />
+          </div>
+        </>
+      )}
+
+      {subTab === "coupes" && (
+        <>
+          <NextMatchCard fixtures={data.coupes.fixtures} />
+          <div style={{ marginTop: 20 }}>
+            <RoundMatches
+              title="Tour précédent"
+              label={data.coupes.prevRoundLabel}
+              setLabel={(v) => update("coupes", "prevRoundLabel", v)}
+              matches={data.coupes.prevRound}
+              setMatches={(v) => update("coupes", "prevRound", v)}
+            />
+          </div>
+          <div style={{ marginTop: 20 }}>
+            <RoundMatches
+              title="Tour à venir"
+              label={data.coupes.nextRoundLabel}
+              setLabel={(v) => update("coupes", "nextRoundLabel", v)}
+              matches={data.coupes.nextRound}
+              setMatches={(v) => update("coupes", "nextRound", v)}
+            />
+          </div>
+          <div style={{ marginTop: 20 }}>
+            <FixtureList fixtures={data.coupes.fixtures} setFixtures={(v) => update("coupes", "fixtures", v)} />
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -3096,6 +3445,7 @@ const CSS = `
   .stats-screen { padding: 24px 24px 48px; max-width: 1000px; margin: 0 auto; }
   .stats-screen-header { margin-bottom: 20px; }
   .player-select { width: 100%; max-width: 420px; background: var(--surface); border: 1px solid var(--line); color: var(--ink); border-radius: 6px; padding: 8px 10px; font-size: 12px; margin-bottom: 8px; }
+  .score-input { width: 38px; background: var(--bg); border: 1px solid var(--line); color: var(--ink); border-radius: 5px; padding: 5px; font-size: 12px; text-align: center; }
   .bar-cell-wrap { display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 4px 0; }
   .bar-cell-track { height: 42px; width: 22px; display: flex; align-items: flex-end; background: rgba(255,255,255,0.03); border-radius: 3px; overflow: hidden; }
   .bar-cell-fill { width: 100%; border-radius: 2px 2px 0 0; min-height: 2px; opacity: 0.85; }
