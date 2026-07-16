@@ -248,7 +248,7 @@ export default function App() {
 
   function persistIndexUpdate(match) {
     setMatches((prev) => {
-      const summary = { id: match.id, name: match.name, opponent: match.opponent, date: match.date, tagCount: match.tags.length };
+      const summary = { id: match.id, name: match.name, opponent: match.opponent, date: match.date, tagCount: match.tags.length, closed: !!match.closed };
       const idx = prev.findIndex((m) => m.id === match.id);
       const next = idx >= 0 ? [...prev.slice(0, idx), summary, ...prev.slice(idx + 1)] : [summary, ...prev];
       writeIndex(next);
@@ -267,6 +267,10 @@ export default function App() {
     });
   }
 
+  function setMatchClosed(closed) {
+    updateMatch((m) => ({ ...m, closed }));
+  }
+
   function createMatch() {
     const name = newMatchForm.name.trim() || `Match du ${formatDateFr(newMatchForm.date || todayIso())}`;
     const match = {
@@ -277,6 +281,7 @@ export default function App() {
       tags: [],
       possession: [],
       ratings: {},
+      closed: false,
     };
     writeMatch(match);
     persistIndexUpdate(match);
@@ -296,7 +301,7 @@ export default function App() {
     try {
       const raw = localStorage.getItem(matchStorageKey(summary.id));
       const parsed = raw ? JSON.parse(raw) : { ...summary, tags: [] };
-      const match = { ...parsed, tags: parsed.tags || [], possession: parsed.possession || [], ratings: parsed.ratings || {} };
+      const match = { ...parsed, tags: parsed.tags || [], possession: parsed.possession || [], ratings: parsed.ratings || {}, closed: !!parsed.closed };
       setCurrentMatch(match);
       setVideoUrl(null);
       setVideoDuration(0);
@@ -540,6 +545,7 @@ export default function App() {
               setPlayerRating={setPlayerRating}
               goHome={() => setScreen("home")}
               goTagging={() => setScreen("tagging")}
+              setMatchClosed={setMatchClosed}
               saveStatus={saveStatus}
             />
           )}
@@ -581,6 +587,7 @@ export default function App() {
           compilationJob={compilationJob}
           compilations={compilations}
           goRating={() => setScreen("rating")}
+          setMatchClosed={setMatchClosed}
         />
       )}
         </>
@@ -594,7 +601,7 @@ function HomeScreen({ matches, matchesLoaded, showNewForm, setShowNewForm, newMa
     <div className="home">
       <header className="home-header">
         <div className="eyebrow">Assistant coaching</div>
-        <h1>Football Analysis</h1>
+        <h1>Studio</h1>
         <p className="subtitle">Repère chaque action pendant le match, les statistiques se construisent toutes seules.</p>
       </header>
 
@@ -646,7 +653,7 @@ function HomeScreen({ matches, matchesLoaded, showNewForm, setShowNewForm, newMa
         {matches.map((m) => (
           <div className="match-card" key={m.id} onClick={() => openMatch(m)}>
             <div className="match-card-main">
-              <div className="match-card-name">{m.name}</div>
+              <div className="match-card-name">{m.name} {m.closed && <span className="closed-badge-inline">✓ clôturé</span>}</div>
               <div className="match-card-meta">vs {m.opponent} · {formatDateFr(m.date)}</div>
             </div>
             <div className="match-card-side">
@@ -743,6 +750,29 @@ function PlaceholderScreen({ title, description }) {
   );
 }
 
+function buildCollectiveComparison(closedMatches) {
+  const last5 = closedMatches.slice(-5);
+  const rows = ALL_EVENTS.map((ev) => {
+    const matchValues = last5.map((m) => m.tags.filter((t) => t.eventKey === ev.key && t.team === "us").length);
+    const allValues = closedMatches.map((m) => m.tags.filter((t) => t.eventKey === ev.key && t.team === "us").length);
+    const avg = (arr) => (arr.length > 0 ? Math.round((arr.reduce((a, b) => a + b, 0) / arr.length) * 10) / 10 : 0);
+    return { event: ev, matchValues, avgLast5: avg(matchValues), avgAll: avg(allValues) };
+  });
+  return { last5, rows };
+}
+
+function buildIndividualComparison(closedMatches, team, player) {
+  const matchesWithPlayer = closedMatches.filter((m) => m.tags.some((t) => t.team === team && t.player === player));
+  const last5 = matchesWithPlayer.slice(-5);
+  const rows = ALL_EVENTS.map((ev) => {
+    const matchValues = last5.map((m) => m.tags.filter((t) => t.eventKey === ev.key && t.team === team && t.player === player).length);
+    const allValues = matchesWithPlayer.map((m) => m.tags.filter((t) => t.eventKey === ev.key && t.team === team && t.player === player).length);
+    const avg = (arr) => (arr.length > 0 ? Math.round((arr.reduce((a, b) => a + b, 0) / arr.length) * 10) / 10 : 0);
+    return { event: ev, matchValues, avgLast5: avg(matchValues), avgAll: avg(allValues) };
+  });
+  return { last5, rows, totalMatches: matchesWithPlayer.length };
+}
+
 function StatsScreen({ matches }) {
   const [allFullMatches, setAllFullMatches] = useState([]);
   const [loaded, setLoaded] = useState(false);
@@ -758,7 +788,7 @@ function StatsScreen({ matches }) {
           return null;
         }
       })
-      .filter(Boolean)
+      .filter((m) => m && m.closed)
       .sort((a, b) => new Date(a.date) - new Date(b.date));
     setAllFullMatches(full);
     setLoaded(true);
@@ -771,18 +801,38 @@ function StatsScreen({ matches }) {
     () => (selTeam ? getPlayerHistory(allFullMatches, selTeam, selPlayer) : []),
     [allFullMatches, selTeam, selPlayer]
   );
+  const collectiveComparison = useMemo(() => buildCollectiveComparison(allFullMatches), [allFullMatches]);
+  const individualComparison = useMemo(
+    () => (selTeam ? buildIndividualComparison(allFullMatches, selTeam, selPlayer) : null),
+    [allFullMatches, selTeam, selPlayer]
+  );
+
+  function downloadCollectiveComparison() {
+    const { last5, rows } = collectiveComparison;
+    const header = ["Action", ...last5.map((m) => m.name), `Moyenne ${last5.length} derniers`, `Moyenne ensemble (${allFullMatches.length})`];
+    const csvRows = [header, ...rows.map((r) => [r.event.label, ...r.matchValues, r.avgLast5, r.avgAll])];
+    downloadCSV("comparaison_collective.csv", csvRows);
+  }
+
+  function downloadIndividualComparison() {
+    if (!individualComparison) return;
+    const { last5, rows } = individualComparison;
+    const header = ["Action", ...last5.map((m) => m.name), `Moyenne ${last5.length} derniers`, `Moyenne ensemble (${individualComparison.totalMatches})`];
+    const csvRows = [header, ...rows.map((r) => [r.event.label, ...r.matchValues, r.avgLast5, r.avgAll])];
+    downloadCSV(`comparaison_n${selPlayer}_${selTeam === "us" ? "nous" : "adversaire"}.csv`, csvRows);
+  }
 
   return (
     <div className="stats-screen">
       <div className="stats-screen-header">
         <div className="eyebrow">Assistant coaching</div>
         <h1>Statistiques</h1>
-        <p className="subtitle">L'évolution de l'équipe et de chaque joueur à travers tous les matchs tagués.</p>
+        <p className="subtitle">L'évolution de l'équipe et de chaque joueur à travers tous les matchs clôturés.</p>
       </div>
 
       {!loaded && <div className="empty-state">Chargement…</div>}
       {loaded && matchSummaries.length === 0 && (
-        <div className="empty-state">Aucun match tagué pour l'instant — reviens ici une fois quelques matchs analysés dans Studio.</div>
+        <div className="empty-state">Aucun match clôturé pour l'instant — clôture un match depuis Studio une fois son tagging terminé pour le voir apparaître ici.</div>
       )}
 
       {matchSummaries.length > 0 && (
@@ -867,13 +917,80 @@ function StatsScreen({ matches }) {
               </div>
             </>
           )}
+
+          <div className="range-filter-header">
+            <div className="panel-heading" style={{ marginBottom: 0 }}>Comparaison collective (Nous) — toutes les statistiques</div>
+            <button className="btn btn-ghost btn-small" onClick={downloadCollectiveComparison}><Download size={12} /> CSV</button>
+          </div>
+          <div className="table-scroll">
+            <table className="stat-table">
+              <thead>
+                <tr>
+                  <th>Action</th>
+                  {collectiveComparison.last5.map((m) => <th key={m.id}>{m.name}</th>)}
+                  <th className="col-us">Moy. {collectiveComparison.last5.length} derniers</th>
+                  <th className="col-us">Moy. ensemble ({allFullMatches.length})</th>
+                </tr>
+              </thead>
+              <tbody>
+                {collectiveComparison.rows.map((r) => (
+                  <tr key={r.event.key}>
+                    <td>{r.event.label}</td>
+                    {r.matchValues.map((v, i) => <td key={i}>{v}</td>)}
+                    <td>{r.avgLast5}</td>
+                    <td>{r.avgAll}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="panel-heading" style={{ marginTop: 20 }}>Comparaison individuelle — toutes les statistiques</div>
+          <select className="player-select" value={selectedPlayerKey} onChange={(e) => setSelectedPlayerKey(e.target.value)}>
+            <option value="">Choisir un joueur…</option>
+            {allPlayers.map((p) => (
+              <option key={`${p.team}_${p.player}`} value={`${p.team}_${p.player}`}>
+                n°{p.player} ({p.team === "us" ? "Nous" : "Adversaire"}) — {p.matchCount} match{p.matchCount > 1 ? "s" : ""}
+              </option>
+            ))}
+          </select>
+          {individualComparison && (
+            <>
+              <div className="range-filter-header">
+                <span />
+                <button className="btn btn-ghost btn-small" onClick={downloadIndividualComparison}><Download size={12} /> CSV</button>
+              </div>
+              <div className="table-scroll">
+                <table className="stat-table">
+                  <thead>
+                    <tr>
+                      <th>Action</th>
+                      {individualComparison.last5.map((m) => <th key={m.id}>{m.name}</th>)}
+                      <th className="col-us">Moy. {individualComparison.last5.length} derniers</th>
+                      <th className="col-us">Moy. ensemble ({individualComparison.totalMatches})</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {individualComparison.rows.map((r) => (
+                      <tr key={r.event.key}>
+                        <td>{r.event.label}</td>
+                        {r.matchValues.map((v, i) => <td key={i}>{v}</td>)}
+                        <td>{r.avgLast5}</td>
+                        <td>{r.avgAll}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
         </>
       )}
     </div>
   );
 }
 
-function RatingScreen({ match, setTeamRating, setPlayerRating, goHome, goTagging, saveStatus }) {
+function RatingScreen({ match, setTeamRating, setPlayerRating, goHome, goTagging, saveStatus, setMatchClosed }) {
   const suggestions = useMemo(() => computeRatingSuggestions(match), [match.tags]);
   const [newPlayerNum, setNewPlayerNum] = useState({ us: "", opp: "" });
 
@@ -941,6 +1058,11 @@ function RatingScreen({ match, setTeamRating, setPlayerRating, goHome, goTagging
           <div className="topbar-meta">vs {match.opponent}</div>
         </div>
         <SaveIndicator status={saveStatus} />
+        {match.closed ? (
+          <button className="btn btn-ghost btn-small closed-badge" onClick={() => setMatchClosed(false)}>✓ Clôturé — rouvrir</button>
+        ) : (
+          <button className="btn btn-primary btn-small" onClick={() => setMatchClosed(true)}>Clôturer le match</button>
+        )}
         <button className="btn btn-ghost btn-small" onClick={downloadRatings}><Download size={13} /> CSV</button>
         <button className="btn btn-ghost btn-small" onClick={goTagging}>Retour au tagging</button>
       </div>
@@ -1073,7 +1195,7 @@ function TaggingScreen(props) {
     addTag, removeTag, setTagPlayer, exportMatch, goHome, lastTagFlash,
     videoError, setVideoError, videoLoading, setVideoLoading,
     pendingPlayerTag, assignPendingPlayer, dismissPendingPlayer, setPossession,
-    runCompilation, compilationJob, compilations, goRating,
+    runCompilation, compilationJob, compilations, goRating, setMatchClosed,
   } = props;
 
   const fileInputRef = useRef(null);
@@ -1163,6 +1285,11 @@ function TaggingScreen(props) {
           <div className="topbar-meta">vs {match.opponent}</div>
         </div>
         <SaveIndicator status={saveStatus} />
+        {match.closed ? (
+          <button className="btn btn-ghost btn-small closed-badge" onClick={() => setMatchClosed(false)}>✓ Clôturé — rouvrir</button>
+        ) : (
+          <button className="btn btn-primary btn-small" onClick={() => setMatchClosed(true)}>Clôturer le match</button>
+        )}
         <button className="btn btn-ghost btn-small" onClick={goRating}>Noter le match</button>
         <button className="btn btn-ghost btn-small" onClick={exportMatch}><Download size={13} /> Exporter</button>
       </div>
@@ -1624,6 +1751,8 @@ const CSS = `
   .placeholder-screen { max-width: 560px; margin: 80px auto; padding: 0 24px; text-align: center; }
   .placeholder-screen h1 { font-size: 26px; font-weight: 800; margin: 0 0 10px; }
   .placeholder-badge { display: inline-block; margin-top: 16px; background: var(--surface); border: 1px solid var(--line); color: var(--ink-muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 700; padding: 6px 14px; border-radius: 20px; }
+  .closed-badge { border-color: var(--gold); color: var(--gold); }
+  .closed-badge-inline { font-size: 10px; font-weight: 700; color: var(--gold); background: rgba(227,178,60,0.14); padding: 2px 7px; border-radius: 10px; margin-left: 6px; vertical-align: middle; }
 
   .home { padding: 32px 28px 40px; max-width: 720px; margin: 0 auto; }
   .home-header { margin-bottom: 24px; }
