@@ -297,6 +297,40 @@ export default function App() {
     setCompilations([]);
   }
 
+  function importMatchesFile(file) {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const parsed = JSON.parse(e.target.result);
+        const list = Array.isArray(parsed) ? parsed : [parsed];
+        const imported = list.map((m) => ({
+          id: m.id || newId(),
+          name: m.name || "Match importé",
+          opponent: m.opponent || "Adversaire",
+          date: m.date || todayIso(),
+          tags: m.tags || [],
+          possession: m.possession || [],
+          ratings: m.ratings || {},
+          closed: !!m.closed,
+        }));
+        imported.forEach((m) => writeMatch(m));
+        setMatches((prev) => {
+          const map = new Map(prev.map((s) => [s.id, s]));
+          imported.forEach((m) => {
+            map.set(m.id, { id: m.id, name: m.name, opponent: m.opponent, date: m.date, tagCount: m.tags.length, closed: m.closed });
+          });
+          const next = Array.from(map.values());
+          writeIndex(next);
+          return next;
+        });
+        alert(`${imported.length} match${imported.length > 1 ? "s" : ""} importé${imported.length > 1 ? "s" : ""} avec succès.`);
+      } catch (err) {
+        alert("Le fichier n'a pas pu être importé (JSON invalide).");
+      }
+    };
+    reader.readAsText(file);
+  }
+
   function openMatch(summary, targetScreen) {
     try {
       const raw = localStorage.getItem(matchStorageKey(summary.id));
@@ -536,6 +570,7 @@ export default function App() {
               createMatch={createMatch}
               openMatch={openMatch}
               deleteMatch={deleteMatch}
+              importMatchesFile={importMatchesFile}
             />
           )}
           {screen === "rating" && currentMatch && (
@@ -596,7 +631,8 @@ export default function App() {
   );
 }
 
-function HomeScreen({ matches, matchesLoaded, showNewForm, setShowNewForm, newMatchForm, setNewMatchForm, createMatch, openMatch, deleteMatch }) {
+function HomeScreen({ matches, matchesLoaded, showNewForm, setShowNewForm, newMatchForm, setNewMatchForm, createMatch, openMatch, deleteMatch, importMatchesFile }) {
+  const importInputRef = useRef(null);
   return (
     <div className="home">
       <header className="home-header">
@@ -606,9 +642,24 @@ function HomeScreen({ matches, matchesLoaded, showNewForm, setShowNewForm, newMa
       </header>
 
       {!showNewForm && (
-        <button className="btn btn-primary btn-large" onClick={() => setShowNewForm(true)}>
-          + Nouveau match
-        </button>
+        <div className="home-actions-row">
+          <button className="btn btn-primary btn-large" onClick={() => setShowNewForm(true)}>
+            + Nouveau match
+          </button>
+          <button className="btn btn-ghost btn-large" onClick={() => importInputRef.current && importInputRef.current.click()}>
+            Importer un/des match(s) JSON
+          </button>
+          <input
+            ref={importInputRef}
+            type="file"
+            accept="application/json"
+            style={{ display: "none" }}
+            onChange={(e) => {
+              if (e.target.files && e.target.files[0]) importMatchesFile(e.target.files[0]);
+              e.target.value = "";
+            }}
+          />
+        </div>
       )}
 
       {showNewForm && (
@@ -2239,6 +2290,7 @@ const CSS = `
   .btn-ghost { background: transparent; color: var(--ink-muted); border: 1px solid var(--line); }
   .btn-ghost:hover { color: var(--ink); border-color: var(--ink-muted); }
   .btn-large { padding: 14px 22px; font-size: 15px; }
+  .home-actions-row { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 24px; }
   .btn-small { padding: 6px 12px; font-size: 12px; }
 
   .new-match-card { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 20px; margin-top: 16px; display: flex; flex-direction: column; gap: 14px; }
