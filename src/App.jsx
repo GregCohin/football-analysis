@@ -935,6 +935,98 @@ function generateAllSignals(matchSummaries, allFullMatches, allPlayers) {
   return signals;
 }
 
+function computeProfileStability(allFullMatches) {
+  const perMatchRadar = allFullMatches.map((m) => {
+    const tags = m.tags.filter((t) => t.team === "us");
+    const values = computeRadarValues(tags, RADAR_AXES);
+    let bestIdx = 0;
+    values.forEach((v, i) => { if (v.value > values[bestIdx].value) bestIdx = i; });
+    return { matchName: m.name, values, dominantAxis: RADAR_AXES[bestIdx].label };
+  });
+
+  const axisStability = RADAR_AXES.map((axis, i) => {
+    const vals = perMatchRadar.map((m) => m.values[i].value);
+    const min = vals.length ? Math.min(...vals) : 0;
+    const max = vals.length ? Math.max(...vals) : 0;
+    return { axis: axis.label, min, max, spread: max - min };
+  }).sort((a, b) => a.spread - b.spread);
+
+  const dominantCounts = {};
+  RADAR_AXES.forEach((a) => { dominantCounts[a.label] = 0; });
+  perMatchRadar.forEach((m) => { dominantCounts[m.dominantAxis]++; });
+
+  return { axisStability, dominantCounts, matchCount: perMatchRadar.length };
+}
+
+function suggestionToColor(score) {
+  const t = Math.max(0, Math.min(1, score / 10));
+  const c1 = [214, 72, 63];
+  const c2 = [227, 178, 60];
+  const rgb = c1.map((v, i) => Math.round(v + (c2[i] - v) * t));
+  return `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`;
+}
+
+function resultLetter(goalsUs, goalsOpp) {
+  if (goalsUs > goalsOpp) return "V";
+  if (goalsUs < goalsOpp) return "D";
+  return "N";
+}
+
+function computeSquadUsage(allFullMatches, allPlayers) {
+  return allPlayers
+    .map((p) => {
+      let totalActions = 0;
+      allFullMatches.forEach((m) => {
+        totalActions += m.tags.filter((t) => t.team === p.team && t.player === p.player).length;
+      });
+      return {
+        player: p.player,
+        matchCount: p.matchCount,
+        totalActions,
+        avgPerMatch: p.matchCount > 0 ? Math.round((totalActions / p.matchCount) * 10) / 10 : 0,
+      };
+    })
+    .sort((a, b) => b.matchCount - a.matchCount || b.totalActions - a.totalActions);
+}
+
+function computeSeasonHighlights(matchSummaries, allFullMatches, allPlayers) {
+  if (matchSummaries.length === 0) return null;
+
+  const sorted = [...matchSummaries].sort((a, b) => b.teamSuggestUs - a.teamSuggestUs);
+  const best = sorted[0];
+  const worst = sorted[sorted.length - 1];
+
+  let streakType = null;
+  let streakCount = 0;
+  for (let i = matchSummaries.length - 1; i >= 0; i--) {
+    const m = matchSummaries[i];
+    const isWin = m.goalsUs > m.goalsOpp;
+    if (streakType === null) {
+      streakType = isWin ? "victoires" : "sans victoire";
+      streakCount = 1;
+    } else if ((streakType === "victoires") === isWin) {
+      streakCount++;
+    } else break;
+  }
+
+  let mostConsistent = null;
+  let lowestStdev = Infinity;
+  allPlayers.forEach((p) => {
+    const hist = getPlayerHistory(allFullMatches, p.team, p.player);
+    const suggs = hist.map((h) => h.suggestion).filter((v) => v != null);
+    if (suggs.length < 3) return;
+    const avg = suggs.reduce((a, b) => a + b, 0) / suggs.length;
+    const variance = suggs.reduce((a, v) => a + (v - avg) ** 2, 0) / suggs.length;
+    const stdev = Math.sqrt(variance);
+    if (stdev < lowestStdev) {
+      lowestStdev = stdev;
+      mostConsistent = { player: p.player, avg: Math.round(avg * 10) / 10, matches: suggs.length };
+    }
+  });
+
+  return { best, worst, streakType, streakCount, mostConsistent };
+}
+
 function StatsScreen({ matches }) {
   const [allFullMatches, setAllFullMatches] = useState([]);
   const [loaded, setLoaded] = useState(false);
@@ -974,6 +1066,13 @@ function StatsScreen({ matches }) {
     const usValues = computeRadarValues(usTags, RADAR_AXES);
     return RADAR_AXES.map((axis, i) => ({ axis: axis.label, us: usValues[i].value }));
   }, [allFullMatches, teamRadarRange]);
+
+  const profileStability = useMemo(() => computeProfileStability(allFullMatches), [allFullMatches]);
+  const squadUsage = useMemo(() => computeSquadUsage(allFullMatches, allPlayers), [allFullMatches, allPlayers]);
+  const seasonHighlights = useMemo(
+    () => computeSeasonHighlights(matchSummaries, allFullMatches, allPlayers),
+    [matchSummaries, allFullMatches, allPlayers]
+  );
 
   const collectiveComparison = useMemo(() => buildCollectiveComparison(allFullMatches), [allFullMatches]);
   const individualComparison = useMemo(
@@ -1108,6 +1207,50 @@ function StatsScreen({ matches }) {
 
       {matchSummaries.length > 0 && statsSubTab === "collectif" && (
         <>
+          {seasonHighlights && (
+            <div className="comparison-summary-row highlights-row">
+              <div className="comparison-summary-card">
+                <h4>Meilleur match</h4>
+                <div>{seasonHighlights.best.name}</div>
+                <div>Suggestion : {seasonHighlights.best.teamSuggestUs}/10</div>
+              </div>
+              <div className="comparison-summary-card">
+                <h4>Pire match</h4>
+                <div>{seasonHighlights.worst.name}</div>
+                <div>Suggestion : {seasonHighlights.worst.teamSuggestUs}/10</div>
+              </div>
+              <div className="comparison-summary-card">
+                <h4>Série en cours</h4>
+                <div>{seasonHighlights.streakCount} {seasonHighlights.streakType} de suite</div>
+              </div>
+              <div className="comparison-summary-card">
+                <h4>Joueur le plus régulier</h4>
+                {seasonHighlights.mostConsistent ? (
+                  <>
+                    <div>n°{seasonHighlights.mostConsistent.player}</div>
+                    <div>Moy. {seasonHighlights.mostConsistent.avg}/10 sur {seasonHighlights.mostConsistent.matches} matchs</div>
+                  </>
+                ) : (
+                  <div>Pas encore assez de matchs par joueur</div>
+                )}
+              </div>
+            </div>
+          )}
+
+          <div className="panel-heading">Calendrier de forme</div>
+          <div className="form-calendar">
+            {matchSummaries.map((s) => (
+              <div
+                key={s.id}
+                className="form-calendar-cell"
+                style={{ background: suggestionToColor(s.teamSuggestUs) }}
+                title={`${s.name} — ${formatDateFr(s.date)} — Suggestion ${s.teamSuggestUs}/10 — ${s.goalsUs}-${s.goalsOpp}`}
+              >
+                {resultLetter(s.goalsUs, s.goalsOpp)}
+              </div>
+            ))}
+          </div>
+
           {teamSignals.length > 0 && (
             <div className="signals-box">
               <div className="signals-box-title">Signaux — Équipe</div>
@@ -1173,6 +1316,29 @@ function StatsScreen({ matches }) {
             </ResponsiveContainer>
           </div>
 
+          <div className="panel-heading" style={{ marginTop: 20 }}>Stabilité du profil de jeu</div>
+          <p className="radar-note">Écart entre le match le plus fort et le plus faible sur chaque axe (calculé match par match, pas en moyenne) — plus l'écart est petit, plus l'axe est stable d'un match à l'autre.</p>
+          <div className="table-scroll">
+            <table className="stat-table">
+              <thead><tr><th>Axe</th><th>Min</th><th>Max</th><th>Écart</th></tr></thead>
+              <tbody>
+                {profileStability.axisStability.map((a) => (
+                  <tr key={a.axis}>
+                    <td>{a.axis}</td>
+                    <td>{a.min}%</td>
+                    <td>{a.max}%</td>
+                    <td>{a.spread} pts</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className="dominant-axis-row">
+            {Object.entries(profileStability.dominantCounts).sort((a, b) => b[1] - a[1]).map(([axis, count]) => (
+              <span key={axis} className="dominant-axis-chip">{axis} : {count}/{profileStability.matchCount}</span>
+            ))}
+          </div>
+
           <div className="range-filter-header" style={{ marginTop: 20 }}>
             <div className="panel-heading" style={{ marginBottom: 0 }}>Comparaison collective (Nous) — toutes les statistiques</div>
             <button className="btn btn-ghost btn-small" onClick={downloadCollectiveComparison}><Download size={12} /> CSV</button>
@@ -1199,6 +1365,23 @@ function StatsScreen({ matches }) {
                     </tr>
                   );
                 })}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="panel-heading" style={{ marginTop: 20 }}>Utilisation du groupe</div>
+          <div className="table-scroll">
+            <table className="stat-table">
+              <thead><tr><th>Joueur</th><th>Matchs</th><th>Actions totales</th><th>Moy. par match</th></tr></thead>
+              <tbody>
+                {squadUsage.map((p) => (
+                  <tr key={p.player}>
+                    <td>n°{p.player}</td>
+                    <td>{p.matchCount}</td>
+                    <td>{p.totalActions}</td>
+                    <td>{p.avgPerMatch}</td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>
@@ -2255,6 +2438,11 @@ const CSS = `
   .comparison-summary-card { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; }
   .comparison-summary-card h4 { margin: 0 0 6px; font-size: 12px; font-weight: 700; }
   .comparison-summary-card div { font-size: 11px; color: var(--ink-muted); margin-bottom: 2px; }
+  .highlights-row { margin-bottom: 20px; }
+  .form-calendar { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 20px; }
+  .form-calendar-cell { width: 34px; height: 34px; border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 800; color: #17231B; cursor: default; }
+  .dominant-axis-row { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0 20px; }
+  .dominant-axis-chip { background: var(--surface); border: 1px solid var(--line); border-radius: 20px; padding: 5px 12px; font-size: 11px; color: var(--ink-muted); }
   .player-avg-summary { display: flex; gap: 18px; flex-wrap: wrap; font-size: 12px; color: var(--ink-muted); margin-bottom: 10px; }
   .player-avg-summary strong { color: var(--ink); }
   .signals-box { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; margin-bottom: 16px; display: flex; flex-direction: column; gap: 6px; }
