@@ -867,14 +867,20 @@ function computeRadarValues(tags, axes) {
   });
 }
 
-function gatherPlayerTags(allMatches, team, player, last5Only) {
+function resolveScopeMatches(matches, config) {
+  if (config.mode === "last5") return matches.slice(-5);
+  if (config.mode === "custom") return matches.filter((m) => config.matchIds.includes(m.id));
+  return matches;
+}
+
+function gatherPlayerTagsForConfig(allMatches, team, player, config) {
   const matchesWithPlayer = allMatches.filter((m) => m.tags.some((t) => t.team === team && t.player === player));
-  const scope = last5Only ? matchesWithPlayer.slice(-5) : matchesWithPlayer;
+  const scope = resolveScopeMatches(matchesWithPlayer, config);
   return scope.flatMap((m) => m.tags.filter((t) => t.team === team && t.player === player));
 }
 
-function gatherTeamTags(allMatches, team, last5Only) {
-  const scope = last5Only ? allMatches.slice(-5) : allMatches;
+function gatherTeamTagsForConfig(allMatches, team, config) {
+  const scope = resolveScopeMatches(allMatches, config);
   return scope.flatMap((m) => m.tags.filter((t) => t.team === team));
 }
 
@@ -1028,6 +1034,37 @@ function computeSeasonHighlights(matchSummaries, allFullMatches, allPlayers) {
   return { best, worst, streakType, streakCount, mostConsistent };
 }
 
+function RadarRangeControl({ config, setConfig, allMatches, label }) {
+  return (
+    <div className="radar-range-control">
+      {label && <div className="radar-range-label">{label}</div>}
+      <div className="range-filter-actions">
+        <button className={`range-preset-btn ${config.mode === "all" ? "active-preset" : ""}`} onClick={() => setConfig({ ...config, mode: "all" })}>Moyenne d'ensemble</button>
+        <button className={`range-preset-btn ${config.mode === "last5" ? "active-preset" : ""}`} onClick={() => setConfig({ ...config, mode: "last5" })}>5 derniers matchs</button>
+        <button className={`range-preset-btn ${config.mode === "custom" ? "active-preset" : ""}`} onClick={() => setConfig({ ...config, mode: "custom" })}>1 ou plusieurs matchs</button>
+      </div>
+      {config.mode === "custom" && (
+        <div className="multi-select-list radar-match-list">
+          {allMatches.length === 0 && <div className="empty-state">Aucun match clôturé.</div>}
+          {allMatches.slice().reverse().map((m) => (
+            <label key={m.id} className="multi-select-item">
+              <input
+                type="checkbox"
+                checked={config.matchIds.includes(m.id)}
+                onChange={() => {
+                  const next = config.matchIds.includes(m.id) ? config.matchIds.filter((x) => x !== m.id) : [...config.matchIds, m.id];
+                  setConfig({ ...config, matchIds: next });
+                }}
+              />
+              {m.name}
+            </label>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function StatsScreen({ matches }) {
   const [allFullMatches, setAllFullMatches] = useState([]);
   const [loaded, setLoaded] = useState(false);
@@ -1035,8 +1072,9 @@ function StatsScreen({ matches }) {
   const [statsSubTab, setStatsSubTab] = useState("collectif");
   const [compareMatchIds, setCompareMatchIds] = useState([]);
   const [comparePlayerKeys, setComparePlayerKeys] = useState([]);
-  const [radarRange, setRadarRange] = useState("all");
+  const [radarMainConfig, setRadarMainConfig] = useState({ mode: "all", matchIds: [] });
   const [radarCompareWith, setRadarCompareWith] = useState("");
+  const [radarCompareConfig, setRadarCompareConfig] = useState({ mode: "all", matchIds: [] });
 
   useEffect(() => {
     const full = matches
@@ -1061,12 +1099,23 @@ function StatsScreen({ matches }) {
     () => (selTeam ? getPlayerHistory(allFullMatches, selTeam, selPlayer) : []),
     [allFullMatches, selTeam, selPlayer]
   );
-  const [teamRadarRange, setTeamRadarRange] = useState("all");
+  const [teamRadarMainConfig, setTeamRadarMainConfig] = useState({ mode: "all", matchIds: [] });
+  const [teamRadarCompareEnabled, setTeamRadarCompareEnabled] = useState(false);
+  const [teamRadarCompareConfig, setTeamRadarCompareConfig] = useState({ mode: "last5", matchIds: [] });
   const teamRadarChartData = useMemo(() => {
-    const usTags = gatherTeamTags(allFullMatches, "us", teamRadarRange === "last5");
-    const usValues = computeRadarValues(usTags, RADAR_AXES);
-    return RADAR_AXES.map((axis, i) => ({ axis: axis.label, us: usValues[i].value }));
-  }, [allFullMatches, teamRadarRange]);
+    const mainTags = gatherTeamTagsForConfig(allFullMatches, "us", teamRadarMainConfig);
+    const mainValues = computeRadarValues(mainTags, RADAR_AXES);
+    let compareValues = null;
+    if (teamRadarCompareEnabled) {
+      const compareTags = gatherTeamTagsForConfig(allFullMatches, "us", teamRadarCompareConfig);
+      compareValues = computeRadarValues(compareTags, RADAR_AXES);
+    }
+    return RADAR_AXES.map((axis, i) => ({
+      axis: axis.label,
+      main: mainValues[i].value,
+      compare: compareValues ? compareValues[i].value : undefined,
+    }));
+  }, [allFullMatches, teamRadarMainConfig, teamRadarCompareEnabled, teamRadarCompareConfig]);
 
   const profileStability = useMemo(() => computeProfileStability(allFullMatches), [allFullMatches]);
   const squadUsage = useMemo(() => computeSquadUsage(allFullMatches, allPlayers), [allFullMatches, allPlayers]);
@@ -1091,22 +1140,22 @@ function StatsScreen({ matches }) {
   const radarAxesUsed = selectedIsGoalkeeper ? GK_RADAR_AXES : RADAR_AXES;
   const radarMainValues = useMemo(() => {
     if (!selTeam) return null;
-    const tags = gatherPlayerTags(allFullMatches, selTeam, selPlayer, radarRange === "last5");
+    const tags = gatherPlayerTagsForConfig(allFullMatches, selTeam, selPlayer, radarMainConfig);
     return computeRadarValues(tags, radarAxesUsed);
-  }, [allFullMatches, selTeam, selPlayer, radarRange, selectedIsGoalkeeper]);
+  }, [allFullMatches, selTeam, selPlayer, radarMainConfig, selectedIsGoalkeeper]);
 
   const radarCompareValues = useMemo(() => {
     if (!radarCompareWith || !selTeam) return null;
     if (radarCompareWith === "team_us") {
-      const tags = gatherTeamTags(allFullMatches, "us", radarRange === "last5");
+      const tags = gatherTeamTagsForConfig(allFullMatches, "us", radarCompareConfig);
       return computeRadarValues(tags, radarAxesUsed);
     }
     const idx = radarCompareWith.indexOf("_");
     const cTeam = radarCompareWith.slice(0, idx);
     const cPlayer = radarCompareWith.slice(idx + 1);
-    const tags = gatherPlayerTags(allFullMatches, cTeam, cPlayer, radarRange === "last5");
+    const tags = gatherPlayerTagsForConfig(allFullMatches, cTeam, cPlayer, radarCompareConfig);
     return computeRadarValues(tags, radarAxesUsed);
-  }, [allFullMatches, radarCompareWith, radarRange, radarAxesUsed, selTeam]);
+  }, [allFullMatches, radarCompareWith, radarCompareConfig, radarAxesUsed, selTeam]);
 
   const radarChartData = useMemo(() => {
     if (!radarMainValues) return [];
@@ -1272,13 +1321,17 @@ function StatsScreen({ matches }) {
             </table>
           </div>
 
-          <div className="range-filter-header" style={{ marginTop: 20 }}>
-            <div className="panel-heading" style={{ marginBottom: 0 }}>Profil radar collectif</div>
-            <div className="range-filter-actions">
-              <button className={`range-preset-btn ${teamRadarRange === "last5" ? "active-preset" : ""}`} onClick={() => setTeamRadarRange("last5")}>5 derniers</button>
-              <button className={`range-preset-btn ${teamRadarRange === "all" ? "active-preset" : ""}`} onClick={() => setTeamRadarRange("all")}>Ensemble</button>
-            </div>
-          </div>
+          <div className="panel-heading" style={{ marginTop: 20, marginBottom: 8 }}>Profil radar collectif (Nous)</div>
+          <RadarRangeControl config={teamRadarMainConfig} setConfig={setTeamRadarMainConfig} allMatches={allFullMatches} label="Période du profil principal" />
+
+          <label className="radar-compare-toggle">
+            <input type="checkbox" checked={teamRadarCompareEnabled} onChange={(e) => setTeamRadarCompareEnabled(e.target.checked)} />
+            Comparer avec une autre période
+          </label>
+          {teamRadarCompareEnabled && (
+            <RadarRangeControl config={teamRadarCompareConfig} setConfig={setTeamRadarCompareConfig} allMatches={allFullMatches} label="Période de comparaison" />
+          )}
+
           <div className="chart-wrap">
             <ResponsiveContainer width="100%" height={320}>
               <RadarChart data={teamRadarChartData} outerRadius="70%">
@@ -1287,7 +1340,8 @@ function StatsScreen({ matches }) {
                 <PolarRadiusAxis domain={[0, 100]} tick={{ fill: "#8FA599", fontSize: 9 }} />
                 <Tooltip contentStyle={{ background: "#182A21", border: "1px solid #26362C", borderRadius: 6, color: "#EEF3EC" }} />
                 <Legend wrapperStyle={{ fontSize: 11 }} />
-                <Radar name="Nous" dataKey="us" stroke="#E3B23C" fill="#E3B23C" fillOpacity={0.35} />
+                <Radar name="Profil principal" dataKey="main" stroke="#E3B23C" fill="#E3B23C" fillOpacity={0.35} />
+                {teamRadarCompareEnabled && <Radar name="Comparaison" dataKey="compare" stroke="#D6483F" fill="#D6483F" fillOpacity={0.2} />}
               </RadarChart>
             </ResponsiveContainer>
           </div>
@@ -1425,15 +1479,11 @@ function StatsScreen({ matches }) {
 
           {selectedPlayerKey && radarMainValues && (
             <>
-              <div className="range-filter-header" style={{ marginTop: 20 }}>
-                <div className="panel-heading" style={{ marginBottom: 0 }}>
-                  Profil radar{selectedIsGoalkeeper ? " — Gardien" : ""}
-                </div>
-                <div className="range-filter-actions">
-                  <button className={`range-preset-btn ${radarRange === "last5" ? "active-preset" : ""}`} onClick={() => setRadarRange("last5")}>5 derniers</button>
-                  <button className={`range-preset-btn ${radarRange === "all" ? "active-preset" : ""}`} onClick={() => setRadarRange("all")}>Ensemble</button>
-                </div>
+              <div className="panel-heading" style={{ marginTop: 20, marginBottom: 8 }}>
+                Profil radar{selectedIsGoalkeeper ? " — Gardien" : ""}
               </div>
+              <RadarRangeControl config={radarMainConfig} setConfig={setRadarMainConfig} allMatches={allFullMatches} label="Période du profil principal" />
+
               <select className="player-select" value={radarCompareWith} onChange={(e) => setRadarCompareWith(e.target.value)}>
                 <option value="">Comparer avec… (optionnel)</option>
                 <option value="team_us">Moyenne de l'équipe (Nous)</option>
@@ -1443,6 +1493,9 @@ function StatsScreen({ matches }) {
                   </option>
                 ))}
               </select>
+              {radarCompareWith && (
+                <RadarRangeControl config={radarCompareConfig} setConfig={setRadarCompareConfig} allMatches={allFullMatches} label="Période de comparaison" />
+              )}
               <div className="chart-wrap">
                 <ResponsiveContainer width="100%" height={320}>
                   <RadarChart data={radarChartData} outerRadius="70%">
@@ -2441,6 +2494,10 @@ const CSS = `
   .signals-box-full { margin-bottom: 0; }
   .range-preset-btn.active-preset { background: var(--gold); color: var(--gold-ink); border-color: var(--gold); }
   .radar-note { font-size: 11px; color: var(--ink-muted); line-height: 1.5; margin-top: 8px; max-width: 560px; }
+  .radar-range-control { margin-bottom: 10px; }
+  .radar-range-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-muted); font-weight: 700; margin-bottom: 5px; }
+  .radar-match-list { max-height: 160px; margin-top: 6px; margin-bottom: 0; }
+  .radar-compare-toggle { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--ink); margin: 4px 0 10px; cursor: pointer; }
   .placeholder-screen { max-width: 560px; margin: 80px auto; padding: 0 24px; text-align: center; }
   .placeholder-screen h1 { font-size: 26px; font-weight: 800; margin: 0 0 10px; }
   .placeholder-badge { display: inline-block; margin-top: 16px; background: var(--surface); border: 1px solid var(--line); color: var(--ink-muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 700; padding: 6px 14px; border-radius: 20px; }
