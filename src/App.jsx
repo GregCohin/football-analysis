@@ -777,6 +777,7 @@ function StatsScreen({ matches }) {
   const [allFullMatches, setAllFullMatches] = useState([]);
   const [loaded, setLoaded] = useState(false);
   const [selectedPlayerKey, setSelectedPlayerKey] = useState("");
+  const [statsSubTab, setStatsSubTab] = useState("collectif");
 
   useEffect(() => {
     const full = matches
@@ -830,12 +831,19 @@ function StatsScreen({ matches }) {
         <p className="subtitle">L'évolution de l'équipe et de chaque joueur à travers tous les matchs clôturés.</p>
       </div>
 
+      {matchSummaries.length > 0 && (
+        <div className="tabs">
+          <button className={`tab ${statsSubTab === "collectif" ? "active" : ""}`} onClick={() => setStatsSubTab("collectif")}>Collectif</button>
+          <button className={`tab ${statsSubTab === "individuel" ? "active" : ""}`} onClick={() => setStatsSubTab("individuel")}>Individuel</button>
+        </div>
+      )}
+
       {!loaded && <div className="empty-state">Chargement…</div>}
       {loaded && matchSummaries.length === 0 && (
         <div className="empty-state">Aucun match clôturé pour l'instant — clôture un match depuis Studio une fois son tagging terminé pour le voir apparaître ici.</div>
       )}
 
-      {matchSummaries.length > 0 && (
+      {matchSummaries.length > 0 && statsSubTab === "collectif" && (
         <>
           <div className="panel-heading">Évolution de l'équipe (Nous)</div>
           <div className="chart-wrap">
@@ -874,7 +882,38 @@ function StatsScreen({ matches }) {
             </table>
           </div>
 
-          <div className="panel-heading">Évolution par joueur</div>
+          <div className="range-filter-header" style={{ marginTop: 20 }}>
+            <div className="panel-heading" style={{ marginBottom: 0 }}>Comparaison collective (Nous) — toutes les statistiques</div>
+            <button className="btn btn-ghost btn-small" onClick={downloadCollectiveComparison}><Download size={12} /> CSV</button>
+          </div>
+          <div className="table-scroll">
+            <table className="stat-table">
+              <thead>
+                <tr>
+                  <th>Action</th>
+                  {collectiveComparison.last5.map((m) => <th key={m.id}>{m.name}</th>)}
+                  <th className="col-us">Moy. {collectiveComparison.last5.length} derniers</th>
+                  <th className="col-us">Moy. ensemble ({allFullMatches.length})</th>
+                </tr>
+              </thead>
+              <tbody>
+                {collectiveComparison.rows.map((r) => (
+                  <tr key={r.event.key}>
+                    <td>{r.event.label}</td>
+                    {r.matchValues.map((v, i) => <td key={i}>{v}</td>)}
+                    <td>{r.avgLast5}</td>
+                    <td>{r.avgAll}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+
+      {matchSummaries.length > 0 && statsSubTab === "individuel" && (
+        <>
+          <div className="panel-heading">Choisir un joueur</div>
           <select className="player-select" value={selectedPlayerKey} onChange={(e) => setSelectedPlayerKey(e.target.value)}>
             <option value="">Choisir un joueur…</option>
             {allPlayers.map((p) => (
@@ -886,7 +925,8 @@ function StatsScreen({ matches }) {
 
           {selectedPlayerKey && playerHistory.length > 0 && (
             <>
-              <div className="chart-wrap" style={{ marginTop: 14 }}>
+              <div className="panel-heading" style={{ marginTop: 16 }}>Évolution du joueur</div>
+              <div className="chart-wrap">
                 <ResponsiveContainer width="100%" height={220}>
                   <LineChart data={playerHistory} margin={{ top: 10, right: 20, left: -10, bottom: 0 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#26362C" />
@@ -918,46 +958,10 @@ function StatsScreen({ matches }) {
             </>
           )}
 
-          <div className="range-filter-header">
-            <div className="panel-heading" style={{ marginBottom: 0 }}>Comparaison collective (Nous) — toutes les statistiques</div>
-            <button className="btn btn-ghost btn-small" onClick={downloadCollectiveComparison}><Download size={12} /> CSV</button>
-          </div>
-          <div className="table-scroll">
-            <table className="stat-table">
-              <thead>
-                <tr>
-                  <th>Action</th>
-                  {collectiveComparison.last5.map((m) => <th key={m.id}>{m.name}</th>)}
-                  <th className="col-us">Moy. {collectiveComparison.last5.length} derniers</th>
-                  <th className="col-us">Moy. ensemble ({allFullMatches.length})</th>
-                </tr>
-              </thead>
-              <tbody>
-                {collectiveComparison.rows.map((r) => (
-                  <tr key={r.event.key}>
-                    <td>{r.event.label}</td>
-                    {r.matchValues.map((v, i) => <td key={i}>{v}</td>)}
-                    <td>{r.avgLast5}</td>
-                    <td>{r.avgAll}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-
-          <div className="panel-heading" style={{ marginTop: 20 }}>Comparaison individuelle — toutes les statistiques</div>
-          <select className="player-select" value={selectedPlayerKey} onChange={(e) => setSelectedPlayerKey(e.target.value)}>
-            <option value="">Choisir un joueur…</option>
-            {allPlayers.map((p) => (
-              <option key={`${p.team}_${p.player}`} value={`${p.team}_${p.player}`}>
-                n°{p.player} ({p.team === "us" ? "Nous" : "Adversaire"}) — {p.matchCount} match{p.matchCount > 1 ? "s" : ""}
-              </option>
-            ))}
-          </select>
           {individualComparison && (
             <>
-              <div className="range-filter-header">
-                <span />
+              <div className="range-filter-header" style={{ marginTop: 20 }}>
+                <div className="panel-heading" style={{ marginBottom: 0 }}>Comparaison individuelle — toutes les statistiques</div>
                 <button className="btn btn-ghost btn-small" onClick={downloadIndividualComparison}><Download size={12} /> CSV</button>
               </div>
               <div className="table-scroll">
