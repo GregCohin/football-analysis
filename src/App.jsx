@@ -873,6 +873,13 @@ function playerFullName(p) {
   return p.name || "Sans nom";
 }
 
+function computeIMC(p) {
+  const taille = parseFloat(p.taille);
+  const poids = parseFloat(p.poids);
+  if (!taille || !poids) return null;
+  return Math.round((poids / ((taille / 100) ** 2)) * 10) / 10;
+}
+
 function resizeImageFile(file, maxSize = 240, quality = 0.82) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -926,6 +933,7 @@ function RosterScreen({ matches }) {
   const [form, setForm] = useState({
     firstName: "", lastName: "", position: "Attaquant", positionPrecise: "Avant-centre",
     strongFoot: "Droit", preferredNumber: "", photo: "", birthDate: "", notes: "",
+    vma: "", sprint10m: "", sprint30m: "", agilite: "", detente: "", rsa: "", taille: "", poids: "", testDate: "",
   });
   const [photoBusy, setPhotoBusy] = useState(false);
   const [allFullMatches, setAllFullMatches] = useState([]);
@@ -952,6 +960,15 @@ function RosterScreen({ matches }) {
               photo: p.photo || "",
               birthDate: p.birthDate || "",
               notes: p.notes || "",
+              vma: p.vma || "",
+              sprint10m: p.sprint10m || "",
+              sprint30m: p.sprint30m || "",
+              agilite: p.agilite || "",
+              detente: p.detente || "",
+              rsa: p.rsa || "",
+              taille: p.taille || "",
+              poids: p.poids || "",
+              testDate: p.testDate || "",
             };
             const idx = merged.findIndex((m) => m.id === entry.id);
             if (idx >= 0) merged[idx] = entry; else merged.push(entry);
@@ -1010,6 +1027,7 @@ function RosterScreen({ matches }) {
     setForm({
       firstName: "", lastName: "", position: "Attaquant", positionPrecise: POSITION_PRECISE.Attaquant[0],
       strongFoot: "Droit", preferredNumber: "", photo: "", birthDate: "", notes: "",
+      vma: "", sprint10m: "", sprint30m: "", agilite: "", detente: "", rsa: "", taille: "", poids: "", testDate: "",
     });
     setEditingId(null);
     setShowForm(true);
@@ -1026,6 +1044,15 @@ function RosterScreen({ matches }) {
       photo: p.photo || "",
       birthDate: p.birthDate || "",
       notes: p.notes || "",
+      vma: p.vma || "",
+      sprint10m: p.sprint10m || "",
+      sprint30m: p.sprint30m || "",
+      agilite: p.agilite || "",
+      detente: p.detente || "",
+      rsa: p.rsa || "",
+      taille: p.taille || "",
+      poids: p.poids || "",
+      testDate: p.testDate || "",
     });
     setEditingId(p.id);
     setShowForm(true);
@@ -1156,6 +1183,47 @@ function RosterScreen({ matches }) {
             Notes (optionnel)
             <input type="text" placeholder="ex. capitaine, revient de blessure..." value={form.notes} onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))} />
           </label>
+
+          <div className="roster-form-section-title">Tests physiques (optionnel)</div>
+          <div className="roster-physical-grid">
+            <label>
+              VMA (km/h)
+              <input type="number" step="0.1" placeholder="ex. 14.5" value={form.vma} onChange={(e) => setForm((f) => ({ ...f, vma: e.target.value }))} />
+            </label>
+            <label>
+              Sprint 10m (s)
+              <input type="number" step="0.01" placeholder="ex. 1.85" value={form.sprint10m} onChange={(e) => setForm((f) => ({ ...f, sprint10m: e.target.value }))} />
+            </label>
+            <label>
+              Sprint 30m (s)
+              <input type="number" step="0.01" placeholder="ex. 4.20" value={form.sprint30m} onChange={(e) => setForm((f) => ({ ...f, sprint30m: e.target.value }))} />
+            </label>
+            <label>
+              Agilité 505/T-test (s)
+              <input type="number" step="0.01" placeholder="ex. 4.60" value={form.agilite} onChange={(e) => setForm((f) => ({ ...f, agilite: e.target.value }))} />
+            </label>
+            <label>
+              Détente CMJ (cm)
+              <input type="number" step="0.1" placeholder="ex. 38" value={form.detente} onChange={(e) => setForm((f) => ({ ...f, detente: e.target.value }))} />
+            </label>
+            <label>
+              RSA moyen (s)
+              <input type="number" step="0.01" placeholder="ex. 5.10" value={form.rsa} onChange={(e) => setForm((f) => ({ ...f, rsa: e.target.value }))} />
+            </label>
+            <label>
+              Taille (cm)
+              <input type="number" step="1" placeholder="ex. 178" value={form.taille} onChange={(e) => setForm((f) => ({ ...f, taille: e.target.value }))} />
+            </label>
+            <label>
+              Poids (kg)
+              <input type="number" step="0.1" placeholder="ex. 68" value={form.poids} onChange={(e) => setForm((f) => ({ ...f, poids: e.target.value }))} />
+            </label>
+            <label>
+              Date des tests
+              <input type="date" value={form.testDate} onChange={(e) => setForm((f) => ({ ...f, testDate: e.target.value }))} />
+            </label>
+          </div>
+
           <div className="form-actions">
             <button className="btn btn-primary" onClick={savePlayer}>Enregistrer</button>
             <button className="btn btn-ghost" onClick={() => setShowForm(false)}>Annuler</button>
@@ -1180,6 +1248,26 @@ function RosterScreen({ matches }) {
                 <div className="roster-card-position">{p.positionPrecise || p.position}{p.strongFoot ? ` · pied ${p.strongFoot.toLowerCase()}` : ""}</div>
                 {p.birthDate && <div className="roster-card-meta">Né(e) le {formatDateFr(p.birthDate)}</div>}
                 {p.notes && <div className="roster-card-meta">{p.notes}</div>}
+                {(() => {
+                  const imc = computeIMC(p);
+                  const items = [
+                    p.vma && `VMA ${p.vma} km/h`,
+                    p.sprint10m && `10m ${p.sprint10m}s`,
+                    p.sprint30m && `30m ${p.sprint30m}s`,
+                    p.agilite && `Agilité ${p.agilite}s`,
+                    p.detente && `Détente ${p.detente}cm`,
+                    p.rsa && `RSA ${p.rsa}s`,
+                    p.taille && `${p.taille}cm`,
+                    p.poids && `${p.poids}kg`,
+                    imc && `IMC ${imc}`,
+                  ].filter(Boolean);
+                  return items.length > 0 ? (
+                    <div className="roster-card-physical">
+                      {items.join(" · ")}
+                      {p.testDate && <span className="roster-card-testdate"> (tests du {formatDateFr(p.testDate)})</span>}
+                    </div>
+                  ) : null;
+                })()}
                 <div className="roster-card-usage">
                   {usage ? `${usage.matchCount} match${usage.matchCount > 1 ? "s" : ""} · ${usage.totalActions} actions taguées` : "Pas encore associé à un numéro sur un match clôturé"}
                 </div>
@@ -3033,6 +3121,12 @@ const CSS = `
   .roster-photo-preview { width: 64px; height: 64px; border-radius: 8px; overflow: hidden; background: var(--bg); border: 1px solid var(--line); display: flex; align-items: center; justify-content: center; color: var(--ink-muted); flex-shrink: 0; }
   .roster-photo-preview img { width: 100%; height: 100%; object-fit: cover; }
   .roster-photo-btn { cursor: pointer; }
+  .roster-form-section-title { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--gold); font-weight: 700; margin-top: 8px; padding-top: 14px; border-top: 1px solid var(--line); }
+  .roster-physical-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 12px; }
+  .roster-physical-grid label { display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--ink-muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
+  .roster-physical-grid input { background: var(--bg); border: 1px solid var(--line); color: var(--ink); border-radius: 6px; padding: 9px 10px; font-size: 14px; font-weight: 400; text-transform: none; letter-spacing: normal; }
+  .roster-card-physical { font-size: 11px; color: var(--ink); margin-top: 6px; line-height: 1.5; }
+  .roster-card-testdate { color: var(--ink-muted); font-style: italic; }
   .roster-card-number { width: 40px; height: 40px; border-radius: 8px; background: var(--bg); border: 1px solid var(--gold); color: var(--gold); font-weight: 800; font-size: 16px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
   .roster-card-info { flex: 1; min-width: 0; }
   .roster-card-name { font-weight: 700; font-size: 14px; }
