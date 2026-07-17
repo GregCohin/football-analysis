@@ -1569,6 +1569,7 @@ function CompetitionsScreen() {
   const [data, setData] = useState(emptyCompetitionsData());
   const [loaded, setLoaded] = useState(false);
   const [subTab, setSubTab] = useState("preparation");
+  const importInputRef = useRef(null);
 
   useEffect(() => {
     try {
@@ -1592,6 +1593,28 @@ function CompetitionsScreen() {
     });
   }
 
+  function importCompetitionsFile(file) {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const parsed = JSON.parse(e.target.result);
+        setData((prev) => {
+          const next = { ...emptyCompetitionsData(), ...prev, ...parsed };
+          try {
+            localStorage.setItem("tf_competitions", JSON.stringify(next));
+          } catch (err) {
+            alert("La sauvegarde a échoué.");
+          }
+          return next;
+        });
+        alert("Données de compétitions importées avec succès.");
+      } catch (err) {
+        alert("Le fichier n'a pas pu être importé (JSON invalide).");
+      }
+    };
+    reader.readAsText(file);
+  }
+
   if (!loaded) {
     return <div className="stats-screen"><div className="empty-state">Chargement…</div></div>;
   }
@@ -1602,6 +1625,19 @@ function CompetitionsScreen() {
         <div className="eyebrow">Assistant coaching</div>
         <h1>Compétitions</h1>
         <p className="subtitle">Calendrier, résultats et classement de tes matchs de préparation, championnat et coupes.</p>
+        <button className="btn btn-ghost btn-small" onClick={() => importInputRef.current && importInputRef.current.click()} style={{ marginTop: 10 }}>
+          Importer des données JSON
+        </button>
+        <input
+          ref={importInputRef}
+          type="file"
+          accept="application/json"
+          style={{ display: "none" }}
+          onChange={(e) => {
+            if (e.target.files && e.target.files[0]) importCompetitionsFile(e.target.files[0]);
+            e.target.value = "";
+          }}
+        />
       </div>
 
       <div className="tabs">
