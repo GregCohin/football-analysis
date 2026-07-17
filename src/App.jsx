@@ -545,9 +545,7 @@ export default function App() {
       {section === "accueil" && (
         <PlaceholderScreen title="Accueil" description="Vue d'ensemble : prochains matchs, dernières notes, raccourcis vers ce qui est en cours." />
       )}
-      {section === "gameplan" && (
-        <PlaceholderScreen title="Projet de jeu" description="Formalise les principes de ton projet de jeu, phase par phase, pour qu'ils nourrissent la notation et les séances." />
-      )}
+      {section === "gameplan" && <GameplanScreen />}
       {section === "squad" && <RosterScreen matches={matches} />}
       {section === "competitions" && <CompetitionsScreen />}
       {section === "stats" && <StatsScreen matches={matches} />}
@@ -1707,6 +1705,234 @@ function CompetitionsScreen() {
           <div style={{ marginTop: 20 }}>
             <FixtureList fixtures={data.coupes.fixtures} setFixtures={(v) => update("coupes", "fixtures", v)} />
           </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+const PROFILE_POSITIONS = ["Gardien", "Défenseur central", "Latéral", "Milieu défensif", "Milieu axial", "Milieu offensif", "Ailier", "Avant-centre"];
+
+function emptyGameplanData() {
+  const postProfiles = {};
+  PROFILE_POSITIONS.forEach((pos) => {
+    postProfiles[pos] = { passes: 5, technique: 5, finition: 5, defense: 5, discipline: 5 };
+  });
+  return {
+    identity: "",
+    system: "",
+    systemVariants: "",
+    offensive: { construction: "", progression: "", finition: "" },
+    defensive: { hauteurBloc: "", pressing: "", organisation: "" },
+    transitionOff: "",
+    transitionDef: "",
+    cpa: {
+      touchesDef: "", touchesMed: "", touchesOff: "",
+      cfDef: "", cfMed: "", cfOff: "",
+      cornerOff: "", cornerDef: "",
+      penalty: "",
+    },
+    postProfiles,
+  };
+}
+
+function ViewField({ label, value }) {
+  return (
+    <div className="gameplan-view-field">
+      <div className="gameplan-view-label">{label}</div>
+      <div className="gameplan-view-value">{value ? value : <span className="gameplan-empty">Pas encore renseigné</span>}</div>
+    </div>
+  );
+}
+
+function GameplanScreen() {
+  const [data, setData] = useState(emptyGameplanData());
+  const [loaded, setLoaded] = useState(false);
+  const [mode, setMode] = useState("view");
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem("tf_gameplan");
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        setData({ ...emptyGameplanData(), ...parsed, postProfiles: { ...emptyGameplanData().postProfiles, ...(parsed.postProfiles || {}) } });
+        setMode(parsed.identity ? "view" : "edit");
+      } else {
+        setMode("edit");
+      }
+    } catch (e) {
+      setMode("edit");
+    }
+    setLoaded(true);
+  }, []);
+
+  function persist(next) {
+    try {
+      localStorage.setItem("tf_gameplan", JSON.stringify(next));
+    } catch (e) {
+      alert("La sauvegarde a échoué.");
+    }
+  }
+
+  function update(section, field, value) {
+    setData((prev) => {
+      const next = section ? { ...prev, [section]: { ...prev[section], [field]: value } } : { ...prev, [field]: value };
+      persist(next);
+      return next;
+    });
+  }
+
+  function updateProfile(position, axisKey, value) {
+    setData((prev) => {
+      const next = { ...prev, postProfiles: { ...prev.postProfiles, [position]: { ...prev.postProfiles[position], [axisKey]: value } } };
+      persist(next);
+      return next;
+    });
+  }
+
+  if (!loaded) {
+    return <div className="stats-screen"><div className="empty-state">Chargement…</div></div>;
+  }
+
+  return (
+    <div className="stats-screen">
+      <div className="stats-screen-header">
+        <div className="eyebrow">Assistant coaching</div>
+        <h1>Projet de jeu</h1>
+        <p className="subtitle">Le document de référence de ton identité de jeu — utilisé par la notation, le radar collectif et bientôt le recrutement et les séances.</p>
+        <button className="btn btn-primary btn-small" onClick={() => setMode((m) => (m === "view" ? "edit" : "view"))} style={{ marginTop: 10 }}>
+          {mode === "view" ? "Modifier" : "Voir le résultat"}
+        </button>
+      </div>
+
+      {mode === "view" && (
+        <>
+          <div className="gameplan-identity-banner">{data.identity || <span className="gameplan-empty">Identité pas encore renseignée</span>}</div>
+
+          <div className="panel-heading">Système de jeu</div>
+          <ViewField label="Système principal" value={data.system} />
+          <ViewField label="Variantes" value={data.systemVariants} />
+
+          <div className="panel-heading" style={{ marginTop: 20 }}>Phase offensive</div>
+          <ViewField label="Construction" value={data.offensive.construction} />
+          <ViewField label="Progression" value={data.offensive.progression} />
+          <ViewField label="Finition" value={data.offensive.finition} />
+
+          <div className="panel-heading" style={{ marginTop: 20 }}>Phase défensive</div>
+          <ViewField label="Hauteur du bloc" value={data.defensive.hauteurBloc} />
+          <ViewField label="Pressing" value={data.defensive.pressing} />
+          <ViewField label="Organisation" value={data.defensive.organisation} />
+
+          <div className="panel-heading" style={{ marginTop: 20 }}>Transitions</div>
+          <ViewField label="Transition offensive (à la récupération)" value={data.transitionOff} />
+          <ViewField label="Transition défensive (à la perte)" value={data.transitionDef} />
+
+          <div className="panel-heading" style={{ marginTop: 20 }}>Coups de pied arrêtés</div>
+          <ViewField label="Touches — zone défensive" value={data.cpa.touchesDef} />
+          <ViewField label="Touches — zone médiane" value={data.cpa.touchesMed} />
+          <ViewField label="Touches — zone offensive" value={data.cpa.touchesOff} />
+          <ViewField label="Coup franc — zone défensive" value={data.cpa.cfDef} />
+          <ViewField label="Coup franc — zone médiane" value={data.cpa.cfMed} />
+          <ViewField label="Coup franc — zone offensive" value={data.cpa.cfOff} />
+          <ViewField label="Corner offensif" value={data.cpa.cornerOff} />
+          <ViewField label="Corner défensif" value={data.cpa.cornerDef} />
+          <ViewField label="Penalty" value={data.cpa.penalty} />
+
+          <div className="panel-heading" style={{ marginTop: 20 }}>Profils de poste recherchés</div>
+          <div className="table-scroll">
+            <table className="stat-table">
+              <thead><tr><th>Poste</th><th>Passes</th><th>Technique</th><th>Finition</th><th>Défense</th><th>Discipline</th></tr></thead>
+              <tbody>
+                {PROFILE_POSITIONS.map((pos) => (
+                  <tr key={pos}>
+                    <td>{pos}</td>
+                    <td>{data.postProfiles[pos].passes}/10</td>
+                    <td>{data.postProfiles[pos].technique}/10</td>
+                    <td>{data.postProfiles[pos].finition}/10</td>
+                    <td>{data.postProfiles[pos].defense}/10</td>
+                    <td>{data.postProfiles[pos].discipline}/10</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+
+      {mode === "edit" && (
+        <>
+          <div className="new-match-card">
+            <label>
+              Identité en une phrase
+              <input type="text" placeholder="ex. Jeu de possession, pressing haut, transitions rapides" value={data.identity} onChange={(e) => update(null, "identity", e.target.value)} />
+            </label>
+          </div>
+
+          <div className="panel-heading" style={{ marginTop: 20 }}>Système de jeu</div>
+          <div className="new-match-card">
+            <label>Système principal<input type="text" placeholder="ex. 4-3-3" value={data.system} onChange={(e) => update(null, "system", e.target.value)} /></label>
+            <label>Variantes (optionnel)<textarea rows={2} placeholder="ex. 4-2-3-1 en phase défensive basse" value={data.systemVariants} onChange={(e) => update(null, "systemVariants", e.target.value)} /></label>
+          </div>
+
+          <div className="panel-heading" style={{ marginTop: 20 }}>Phase offensive</div>
+          <div className="new-match-card">
+            <label>Construction<textarea rows={2} placeholder="Comment on sort le ballon depuis le gardien/la défense" value={data.offensive.construction} onChange={(e) => update("offensive", "construction", e.target.value)} /></label>
+            <label>Progression<textarea rows={2} placeholder="Comment le ballon avance vers le camp adverse" value={data.offensive.progression} onChange={(e) => update("offensive", "progression", e.target.value)} /></label>
+            <label>Finition<textarea rows={2} placeholder="Comment on cherche à conclure les actions" value={data.offensive.finition} onChange={(e) => update("offensive", "finition", e.target.value)} /></label>
+          </div>
+
+          <div className="panel-heading" style={{ marginTop: 20 }}>Phase défensive</div>
+          <div className="new-match-card">
+            <label>Hauteur du bloc<textarea rows={2} placeholder="Bloc haut / médian / bas" value={data.defensive.hauteurBloc} onChange={(e) => update("defensive", "hauteurBloc", e.target.value)} /></label>
+            <label>Pressing<textarea rows={2} placeholder="Déclenchement, orientation, pièges à ballon" value={data.defensive.pressing} onChange={(e) => update("defensive", "pressing", e.target.value)} /></label>
+            <label>Organisation<textarea rows={2} placeholder="Marquage individuel / zone / mixte" value={data.defensive.organisation} onChange={(e) => update("defensive", "organisation", e.target.value)} /></label>
+          </div>
+
+          <div className="panel-heading" style={{ marginTop: 20 }}>Transitions</div>
+          <div className="new-match-card">
+            <label>Transition offensive — à la récupération<textarea rows={2} value={data.transitionOff} onChange={(e) => update(null, "transitionOff", e.target.value)} /></label>
+            <label>Transition défensive — à la perte<textarea rows={2} value={data.transitionDef} onChange={(e) => update(null, "transitionDef", e.target.value)} /></label>
+          </div>
+
+          <div className="panel-heading" style={{ marginTop: 20 }}>Coups de pied arrêtés</div>
+          <div className="new-match-card">
+            <label>Touches — zone défensive<textarea rows={2} value={data.cpa.touchesDef} onChange={(e) => update("cpa", "touchesDef", e.target.value)} /></label>
+            <label>Touches — zone médiane<textarea rows={2} value={data.cpa.touchesMed} onChange={(e) => update("cpa", "touchesMed", e.target.value)} /></label>
+            <label>Touches — zone offensive<textarea rows={2} value={data.cpa.touchesOff} onChange={(e) => update("cpa", "touchesOff", e.target.value)} /></label>
+            <label>Coup franc — zone défensive<textarea rows={2} value={data.cpa.cfDef} onChange={(e) => update("cpa", "cfDef", e.target.value)} /></label>
+            <label>Coup franc — zone médiane<textarea rows={2} value={data.cpa.cfMed} onChange={(e) => update("cpa", "cfMed", e.target.value)} /></label>
+            <label>Coup franc — zone offensive<textarea rows={2} value={data.cpa.cfOff} onChange={(e) => update("cpa", "cfOff", e.target.value)} /></label>
+            <label>Corner offensif<textarea rows={2} placeholder="Qui monte, organisation des courses" value={data.cpa.cornerOff} onChange={(e) => update("cpa", "cornerOff", e.target.value)} /></label>
+            <label>Corner défensif<textarea rows={2} placeholder="Marquage individuel / zone / mixte" value={data.cpa.cornerDef} onChange={(e) => update("cpa", "cornerDef", e.target.value)} /></label>
+            <label>Penalty<textarea rows={2} placeholder="Tireur désigné, ordre s'il y en a plusieurs" value={data.cpa.penalty} onChange={(e) => update("cpa", "penalty", e.target.value)} /></label>
+          </div>
+
+          <div className="panel-heading" style={{ marginTop: 20 }}>Profils de poste recherchés</div>
+          <p className="radar-note">Pondère chaque axe de 0 à 10 selon l'importance recherchée pour ce poste dans ton système — les mêmes axes que le radar joueur, pour une comparaison directe une fois le poste renseigné dans Effectifs.</p>
+          <div className="table-scroll">
+            <table className="stat-table">
+              <thead><tr><th>Poste</th><th>Passes</th><th>Technique</th><th>Finition</th><th>Défense</th><th>Discipline</th></tr></thead>
+              <tbody>
+                {PROFILE_POSITIONS.map((pos) => (
+                  <tr key={pos}>
+                    <td>{pos}</td>
+                    {["passes", "technique", "finition", "defense", "discipline"].map((axisKey) => (
+                      <td key={axisKey}>
+                        <input
+                          className="score-input"
+                          type="number" min={0} max={10}
+                          value={data.postProfiles[pos][axisKey]}
+                          onChange={(e) => updateProfile(pos, axisKey, Number(e.target.value))}
+                        />
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <button className="btn btn-primary" style={{ marginTop: 20 }} onClick={() => setMode("view")}>Voir le résultat</button>
         </>
       )}
     </div>
@@ -3539,6 +3765,12 @@ const CSS = `
   .new-match-card { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 20px; margin-top: 16px; display: flex; flex-direction: column; gap: 14px; }
   .new-match-card label { display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--ink-muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
   .new-match-card input { background: var(--bg); border: 1px solid var(--line); color: var(--ink); border-radius: 6px; padding: 9px 10px; font-size: 14px; font-weight: 400; text-transform: none; letter-spacing: normal; }
+  .new-match-card textarea { background: var(--bg); border: 1px solid var(--line); color: var(--ink); border-radius: 6px; padding: 9px 10px; font-size: 14px; font-weight: 400; text-transform: none; letter-spacing: normal; font-family: inherit; resize: vertical; }
+  .gameplan-identity-banner { background: var(--surface); border: 1px solid var(--gold); border-radius: 10px; padding: 16px 20px; font-size: 16px; font-weight: 700; color: var(--ink); margin-bottom: 20px; }
+  .gameplan-view-field { margin-bottom: 14px; }
+  .gameplan-view-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-muted); font-weight: 700; margin-bottom: 3px; }
+  .gameplan-view-value { font-size: 13px; color: var(--ink); line-height: 1.5; white-space: pre-wrap; }
+  .gameplan-empty { color: var(--ink-muted); font-style: italic; }
   .new-match-card select { background: var(--bg); border: 1px solid var(--line); color: var(--ink); border-radius: 6px; padding: 9px 10px; font-size: 14px; font-weight: 400; text-transform: none; letter-spacing: normal; }
   .form-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 4px; }
 
