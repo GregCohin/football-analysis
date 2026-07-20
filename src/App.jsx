@@ -403,7 +403,7 @@ export default function App() {
   function addTag(eventKey) {
     if (!currentMatchRef.current || !videoRef.current) return;
     const t = videoRef.current.currentTime;
-    const tag = { id: newId(), time: t, eventKey, team: activeTeam, player: "" };
+    const tag = { id: newId(), time: t, eventKey, team: activeTeam, player: "", zone: "", couloir: "" };
     updateMatch((m) => ({ ...m, tags: [...m.tags, tag].sort((a, b) => a.time - b.time) }));
     setLastTagFlash(tag.id);
     setTimeout(() => setLastTagFlash((cur) => (cur === tag.id ? null : cur)), 500);
@@ -444,6 +444,10 @@ export default function App() {
 
   function setTagPlayer(tagId, player) {
     updateMatch((m) => ({ ...m, tags: m.tags.map((t) => (t.id === tagId ? { ...t, player } : t)) }));
+  }
+
+  function setTagField(tagId, field, value) {
+    updateMatch((m) => ({ ...m, tags: m.tags.map((t) => (t.id === tagId ? { ...t, [field]: value } : t)) }));
   }
 
   function setTeamRating(team, coachScore, comment) {
@@ -552,9 +556,7 @@ export default function App() {
       {section === "sessions" && (
         <PlaceholderScreen title="Séance" description="Génération de séances d'entraînement adaptées à ton projet de jeu et au prochain adversaire." />
       )}
-      {section === "reports" && (
-        <PlaceholderScreen title="Rapports de matchs" description="Synthèse partageable d'un match : statistiques, notes et moments clés en un seul document." />
-      )}
+      {section === "reports" && <ReportsScreen matches={matches} />}
       {section === "observation" && (
         <PlaceholderScreen title="Observation" description="Rapports de forces/faiblesses sur les adversaires à venir, à partir des matchs observés." />
       )}
@@ -619,6 +621,7 @@ export default function App() {
               addTag={addTag}
               removeTag={removeTag}
               setTagPlayer={setTagPlayer}
+              setTagField={setTagField}
           exportMatch={exportMatch}
           goHome={() => setScreen("home")}
           lastTagFlash={lastTagFlash}
@@ -2008,6 +2011,343 @@ function GameplanScreen() {
   );
 }
 
+const ATTACK_COULOIR_EVENTS = ["passe_ok", "centre_ok", "dribble_ok"];
+const ZONE_LABELS = { defensive: "Zone défensive", mediane: "Zone médiane", offensive: "Zone offensive" };
+const COULOIR_LABELS = { gauche: "Aile gauche", axe: "Axe", droite: "Aile droite" };
+
+function computeMatchReport(match) {
+  const goalsUs = match.tags.filter((t) => t.eventKey === "but" && t.team === "us").sort((a, b) => a.time - b.time);
+  const goalsOpp = match.tags.filter((t) => t.eventKey === "but" && t.team === "opp").sort((a, b) => a.time - b.time);
+
+  function countPair(okKey, koKey, team) {
+    const ok = match.tags.filter((t) => t.eventKey === okKey && t.team === team).length;
+    const ko = match.tags.filter((t) => t.eventKey === koKey && t.team === team).length;
+    return { ok, ko, total: ok + ko, pct: ok + ko > 0 ? Math.round((ok / (ok + ko)) * 100) : null };
+  }
+  function count(eventKey, team) {
+    return match.tags.filter((t) => t.eventKey === eventKey && t.team === team).length;
+  }
+
+  const stats = {};
+  ["us", "opp"].forEach((team) => {
+    stats[team] = {
+      passes: countPair("passe_ok", "passe_ko", team),
+      controle: countPair("controle_ok", "controle_ko", team),
+      centre: countPair("centre_ok", "centre_ko", team),
+      dribble: countPair("dribble_ok", "dribble_ko", team),
+      tirsTentes: count("tir_cadre", team) + count("tir_hc", team),
+      tirsCadres: count("tir_cadre", team),
+      duels: countPair("duel_ok", "duel_ko", team),
+      tacles: countPair("tacle_ok", "tacle_ko", team),
+      recup: count("recup", team),
+      perte: count("perte", team),
+      interception: count("interception", team),
+      degagement: count("degagement", team),
+      fauteCommise: count("faute_commise", team),
+      cartonJaune: count("carton_jaune", team),
+      cartonRouge: count("carton_rouge", team),
+      corner: count("corner", team),
+    };
+  });
+
+  const byZone = {};
+  Object.keys(ZONE_LABELS).forEach((z) => {
+    byZone[z] = {
+      passesOk: match.tags.filter((t) => t.team === "us" && t.eventKey === "passe_ok" && t.zone === z).length,
+      passesKo: match.tags.filter((t) => t.team === "us" && t.eventKey === "passe_ko" && t.zone === z).length,
+      recup: match.tags.filter((t) => t.team === "us" && t.eventKey === "recup" && t.zone === z).length,
+      perte: match.tags.filter((t) => t.team === "us" && t.eventKey === "perte" && t.zone === z).length,
+    };
+  });
+  const hasZoneData = match.tags.some((t) => t.zone);
+
+  const byCouloir = {};
+  Object.keys(COULOIR_LABELS).forEach((c) => {
+    byCouloir[c] = match.tags.filter((t) => t.team === "us" && ATTACK_COULOIR_EVENTS.includes(t.eventKey) && t.couloir === c).length;
+  });
+  const hasCouloirData = match.tags.some((t) => t.couloir);
+  const couloirTotal = Object.values(byCouloir).reduce((a, b) => a + b, 0);
+
+  let possUs = null;
+  if (match.possession && match.possession.length > 0) {
+    const dur = { us: 0, opp: 0, neutral: 0 };
+    match.possession.forEach((p) => {
+      const end = p.end != null ? p.end : p.start;
+      dur[p.team] += Math.max(0, end - p.start);
+    });
+    const total = dur.us + dur.opp + dur.neutral;
+    possUs = total > 0 ? Math.round((dur.us / total) * 100) : null;
+  }
+
+  return { goalsUs, goalsOpp, stats, byZone, hasZoneData, byCouloir, hasCouloirData, couloirTotal, possUs };
+}
+
+function generateSynthese(report) {
+  const { goalsUs, goalsOpp, stats, possUs } = report;
+  const parts = [];
+  parts.push(`Match soldé ${goalsUs.length}-${goalsOpp.length}.`);
+  if (possUs != null) parts.push(`Possession de ${possUs}% pour nous (${100 - possUs}% pour l'adversaire).`);
+  if (stats.us.passes.total > 0) parts.push(`${stats.us.passes.pct}% de précision de passe (${stats.us.passes.ok}/${stats.us.passes.total}) contre ${stats.opp.passes.pct != null ? stats.opp.passes.pct : "—"}% pour l'adversaire.`);
+  parts.push(`${stats.us.tirsCadres} tirs cadrés sur ${stats.us.tirsTentes} tentés, contre ${stats.opp.tirsCadres}/${stats.opp.tirsTentes} côté adverse.`);
+  if (stats.us.duels.total > 0) parts.push(`${stats.us.duels.pct}% de duels aériens gagnés.`);
+  const disciplineTotal = stats.us.cartonJaune + stats.us.cartonRouge;
+  if (disciplineTotal > 0) parts.push(`${stats.us.cartonJaune} carton${stats.us.cartonJaune > 1 ? "s" : ""} jaune${stats.us.cartonJaune > 1 ? "s" : ""}${stats.us.cartonRouge > 0 ? ` et ${stats.us.cartonRouge} rouge${stats.us.cartonRouge > 1 ? "s" : ""}` : ""} à notre passif.`);
+  return parts.join(" ");
+}
+
+const SIGNAL_PAIRS = [
+  { key: "passe", label: "Passes", ok: "passe_ok", ko: "passe_ko", gp: (gp) => gp.offensive.progression },
+  { key: "controle", label: "Contrôles", ok: "controle_ok", ko: "controle_ko", gp: (gp) => gp.offensive.construction },
+  { key: "centre", label: "Centres", ok: "centre_ok", ko: "centre_ko", gp: null },
+  { key: "dribble", label: "Dribbles", ok: "dribble_ok", ko: "dribble_ko", gp: null },
+  { key: "tir", label: "Tirs cadrés", ok: "tir_cadre", ko: "tir_hc", gp: (gp) => gp.offensive.finition },
+  { key: "duel", label: "Duels aériens", ok: "duel_ok", ko: "duel_ko", gp: (gp) => gp.defensive.organisation },
+  { key: "tacle", label: "Tacles", ok: "tacle_ok", ko: "tacle_ko", gp: (gp) => gp.defensive.organisation },
+];
+
+function computeMatchSignals(match, gameplan, roster) {
+  const collective = SIGNAL_PAIRS.map((p) => {
+    const ok = match.tags.filter((t) => t.team === "us" && t.eventKey === p.ok).length;
+    const ko = match.tags.filter((t) => t.team === "us" && t.eventKey === p.ko).length;
+    const total = ok + ko;
+    if (total < 3) return null;
+    const pct = Math.round((ok / total) * 100);
+    const ref = p.gp ? qcmChoice(p.gp(gameplan)) : "";
+    return { key: p.key, pct, text: `${p.label} : ${pct}% de réussite (${ok}/${total})`, ref };
+  }).filter(Boolean);
+  const sortedC = [...collective].sort((a, b) => b.pct - a.pct);
+  const positivesCollective = sortedC.slice(0, 3);
+  const negativesCollective = sortedC.length > 3 ? sortedC.slice(-3).reverse() : [];
+
+  const playerStats = {};
+  match.tags.forEach((t) => {
+    if (t.team !== "us" || !t.player) return;
+    const ev = EVENT_MAP[t.eventKey];
+    if (!ev) return;
+    if (!playerStats[t.player]) playerStats[t.player] = { pos: 0, neg: 0 };
+    if (ev.positive) playerStats[t.player].pos++; else playerStats[t.player].neg++;
+  });
+  const individual = Object.entries(playerStats).map(([player, d]) => {
+    const total = d.pos + d.neg;
+    if (total < 3) return null;
+    const pct = Math.round((d.pos / total) * 100);
+    const rid = match.playerAssignments && match.playerAssignments[player];
+    const rp = rid ? roster.find((r) => r.id === rid) : null;
+    const label = rp ? playerFullName(rp) : `n°${player}`;
+    return { player, pct, text: `${label} : ${pct}% de réussite (${d.pos}/${total})` };
+  }).filter(Boolean);
+  const sortedI = [...individual].sort((a, b) => b.pct - a.pct);
+  const positivesIndividual = sortedI.slice(0, 3);
+  const negativesIndividual = sortedI.length > 3 ? sortedI.slice(-3).reverse() : [];
+
+  return { positivesCollective, negativesCollective, positivesIndividual, negativesIndividual };
+}
+
+function CompareBar({ label, us, opp, formatUs, formatOpp }) {
+  const usNum = Number(us) || 0;
+  const oppNum = Number(opp) || 0;
+  const total = usNum + oppNum;
+  const usPct = total > 0 ? (usNum / total) * 100 : 50;
+  return (
+    <div className="compare-bar-row">
+      <span className="compare-bar-val us">{formatUs ? formatUs(us) : us}</span>
+      <div className="compare-bar-mid">
+        <div className="compare-bar-label">{label}</div>
+        <div className="compare-bar-track">
+          <div className="compare-bar-fill" style={{ width: `${usPct}%` }} />
+        </div>
+      </div>
+      <span className="compare-bar-val opp">{formatOpp ? formatOpp(opp) : opp}</span>
+    </div>
+  );
+}
+
+function MatchReportView({ match, report, signals }) {
+  const synthese = useMemo(() => generateSynthese(report), [report]);
+  const { stats } = report;
+  return (
+    <div className="match-report">
+      <div className="match-report-header">
+        <div className="match-report-title">{match.name}</div>
+        <div className="match-report-score">
+          <span className="us">Nous</span>
+          <span className="score-num">{report.goalsUs.length} - {report.goalsOpp.length}</span>
+          <span className="opp">{match.opponent}</span>
+        </div>
+        <div className="match-report-meta">{formatDateFr(match.date)}{report.goalsUs.length + report.goalsOpp.length > 0 && " · Buts : "}
+          {[...report.goalsUs.map((g) => `Nous ${formatTime(g.time)}`), ...report.goalsOpp.map((g) => `${match.opponent} ${formatTime(g.time)}`)].join(", ")}
+        </div>
+      </div>
+
+      <div className="match-report-synthese">{synthese}</div>
+
+      <div className="panel-heading" style={{ marginTop: 18 }}>Statistiques du match</div>
+      <div className="compare-bars">
+        {report.possUs != null && <CompareBar label="Possession" us={`${report.possUs}%`} opp={`${100 - report.possUs}%`} />}
+        <CompareBar label="Passes réussies" us={stats.us.passes.ok} opp={stats.opp.passes.ok} />
+        <CompareBar label="Précision de passe" us={stats.us.passes.pct != null ? `${stats.us.passes.pct}%` : "—"} opp={stats.opp.passes.pct != null ? `${stats.opp.passes.pct}%` : "—"} />
+        <CompareBar label="Tirs tentés" us={stats.us.tirsTentes} opp={stats.opp.tirsTentes} />
+        <CompareBar label="Tirs cadrés" us={stats.us.tirsCadres} opp={stats.opp.tirsCadres} />
+        <CompareBar label="Duels aériens gagnés" us={stats.us.duels.ok} opp={stats.opp.duels.ok} />
+        <CompareBar label="Tacles réussis" us={stats.us.tacles.ok} opp={stats.opp.tacles.ok} />
+        <CompareBar label="Récupérations" us={stats.us.recup} opp={stats.opp.recup} />
+        <CompareBar label="Pertes de balle" us={stats.us.perte} opp={stats.opp.perte} />
+        <CompareBar label="Interceptions" us={stats.us.interception} opp={stats.opp.interception} />
+        <CompareBar label="Dégagements" us={stats.us.degagement} opp={stats.opp.degagement} />
+        <CompareBar label="Corners" us={stats.us.corner} opp={stats.opp.corner} />
+        <CompareBar label="Fautes commises" us={stats.us.fauteCommise} opp={stats.opp.fauteCommise} />
+        <CompareBar label="Cartons jaunes" us={stats.us.cartonJaune} opp={stats.opp.cartonJaune} />
+      </div>
+
+      <div className="panel-heading" style={{ marginTop: 18 }}>Passes / pertes / récupérations par zone</div>
+      {!report.hasZoneData && <div className="empty-state">Aucune zone taguée sur ce match — renseigne la zone dans le Journal de Studio pour débloquer cette section.</div>}
+      {report.hasZoneData && (
+        <div className="table-scroll">
+          <table className="stat-table">
+            <thead><tr><th>Zone</th><th>Passes réussies</th><th>Passes manquées</th><th>Récupérations</th><th>Pertes</th></tr></thead>
+            <tbody>
+              {Object.entries(ZONE_LABELS).map(([key, label]) => (
+                <tr key={key}>
+                  <td>{label}</td>
+                  <td>{report.byZone[key].passesOk}</td>
+                  <td>{report.byZone[key].passesKo}</td>
+                  <td>{report.byZone[key].recup}</td>
+                  <td>{report.byZone[key].perte}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <div className="panel-heading" style={{ marginTop: 18 }}>Origine des attaques (par couloir)</div>
+      {!report.hasCouloirData && <div className="empty-state">Aucun couloir tagué sur ce match — renseigne le couloir dans le Journal de Studio pour débloquer cette section.</div>}
+      {report.hasCouloirData && (
+        <div className="compare-bars">
+          {Object.entries(COULOIR_LABELS).map(([key, label]) => (
+            <div className="compare-bar-row" key={key}>
+              <span className="compare-bar-val us">{report.couloirTotal > 0 ? Math.round((report.byCouloir[key] / report.couloirTotal) * 100) : 0}%</span>
+              <div className="compare-bar-mid">
+                <div className="compare-bar-label">{label}</div>
+                <div className="compare-bar-track"><div className="compare-bar-fill" style={{ width: `${report.couloirTotal > 0 ? (report.byCouloir[key] / report.couloirTotal) * 100 : 0}%` }} /></div>
+              </div>
+              <span className="compare-bar-val opp">{report.byCouloir[key]} actions</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="panel-heading" style={{ marginTop: 18 }}>Signaux — Équipe</div>
+      <div className="signals-columns">
+        <div>
+          <div className="signals-col-title positive">Points forts</div>
+          {signals.positivesCollective.length === 0 && <div className="empty-state">Pas assez de volume pour dégager un signal.</div>}
+          {signals.positivesCollective.map((s, i) => (
+            <div key={i} className="signal-item positive">{s.text}{s.ref && <span className="signal-date">Projet de jeu : {s.ref}</span>}</div>
+          ))}
+        </div>
+        <div>
+          <div className="signals-col-title negative">Points à travailler</div>
+          {signals.negativesCollective.length === 0 && <div className="empty-state">Pas assez de volume pour dégager un signal.</div>}
+          {signals.negativesCollective.map((s, i) => (
+            <div key={i} className="signal-item negative">{s.text}{s.ref && <span className="signal-date">Projet de jeu : {s.ref}</span>}</div>
+          ))}
+        </div>
+      </div>
+
+      <div className="panel-heading" style={{ marginTop: 18 }}>Signaux — Joueurs</div>
+      <div className="signals-columns">
+        <div>
+          <div className="signals-col-title positive">Points forts</div>
+          {signals.positivesIndividual.length === 0 && <div className="empty-state">Pas assez de volume pour dégager un signal.</div>}
+          {signals.positivesIndividual.map((s, i) => <div key={i} className="signal-item positive">{s.text}</div>)}
+        </div>
+        <div>
+          <div className="signals-col-title negative">Points à travailler</div>
+          {signals.negativesIndividual.length === 0 && <div className="empty-state">Pas assez de volume pour dégager un signal.</div>}
+          {signals.negativesIndividual.map((s, i) => <div key={i} className="signal-item negative">{s.text}</div>)}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ReportsScreen({ matches }) {
+  const [allFullMatches, setAllFullMatches] = useState([]);
+  const [roster, setRoster] = useState([]);
+  const [gameplan, setGameplan] = useState(emptyGameplanData());
+  const [selectedMatchId, setSelectedMatchId] = useState(null);
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    const full = matches
+      .map((m) => {
+        try {
+          const raw = localStorage.getItem(matchStorageKey(m.id));
+          return raw ? JSON.parse(raw) : null;
+        } catch (e) {
+          return null;
+        }
+      })
+      .filter((m) => m && m.closed)
+      .sort((a, b) => new Date(a.date) - new Date(b.date));
+    setAllFullMatches(full);
+    setSelectedMatchId((cur) => cur || (full.length > 0 ? full[full.length - 1].id : null));
+    try {
+      const rawRoster = localStorage.getItem("tf_roster");
+      setRoster(rawRoster ? JSON.parse(rawRoster) : []);
+    } catch (e) {}
+    try {
+      const rawGp = localStorage.getItem("tf_gameplan");
+      if (rawGp) setGameplan({ ...emptyGameplanData(), ...JSON.parse(rawGp) });
+    } catch (e) {}
+    setLoaded(true);
+  }, [matches]);
+
+  const selectedMatch = allFullMatches.find((m) => m.id === selectedMatchId);
+  const report = useMemo(() => (selectedMatch ? computeMatchReport(selectedMatch) : null), [selectedMatch]);
+  const signals = useMemo(() => (selectedMatch ? computeMatchSignals(selectedMatch, gameplan, roster) : null), [selectedMatch, gameplan, roster]);
+
+  return (
+    <div className="stats-screen">
+      <div className="stats-screen-header">
+        <div className="eyebrow">Assistant coaching</div>
+        <h1>Rapports de matchs</h1>
+        <p className="subtitle">Synthèse statistique générée automatiquement à partir de ce qui est tagué dans Studio.</p>
+      </div>
+
+      {!loaded && <div className="empty-state">Chargement…</div>}
+      {loaded && allFullMatches.length === 0 && <div className="empty-state">Aucun match clôturé pour l'instant — clôture un match dans Studio pour voir son rapport ici.</div>}
+
+      {selectedMatch && report && signals && <MatchReportView match={selectedMatch} report={report} signals={signals} />}
+
+      {allFullMatches.length > 1 && (
+        <>
+          <div className="panel-heading" style={{ marginTop: 24 }}>Matchs précédents</div>
+          <div className="reports-match-list">
+            {allFullMatches.slice().reverse().map((m) => {
+              const goals = m.tags.filter((t) => t.eventKey === "but");
+              const gUs = goals.filter((t) => t.team === "us").length;
+              const gOpp = goals.filter((t) => t.team === "opp").length;
+              return (
+                <button
+                  key={m.id}
+                  className={`reports-match-item ${m.id === selectedMatchId ? "active" : ""}`}
+                  onClick={() => setSelectedMatchId(m.id)}
+                >
+                  <span className="reports-match-name">{m.name}</span>
+                  <span className="reports-match-score">{gUs} - {gOpp}</span>
+                  <span className="reports-match-date">{formatDateFr(m.date)}</span>
+                </button>
+              );
+            })}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function PlaceholderScreen({ title, description }) {
   return (
     <div className="placeholder-screen">
@@ -3188,7 +3528,7 @@ function TaggingScreen(props) {
     match, videoUrl, videoRef, videoDuration, setVideoDuration, currentTime, setCurrentTime,
     isPlaying, setIsPlaying, playbackRate, setPlaybackRate, activeTeam, setActiveTeam,
     saveStatus, handleFile, togglePlay, seekTo, nudge,
-    addTag, removeTag, setTagPlayer, exportMatch, goHome, lastTagFlash,
+    addTag, removeTag, setTagPlayer, setTagField, exportMatch, goHome, lastTagFlash,
     videoError, setVideoError, videoLoading, setVideoLoading,
     pendingPlayerTag, assignPendingPlayer, dismissPendingPlayer, setPossession,
     runCompilation, compilationJob, compilations, goRating, setMatchClosed, roster, setPlayerAssignments,
@@ -3482,6 +3822,18 @@ function TaggingScreen(props) {
                     onChange={(e) => setTagPlayer(t.id, e.target.value)}
                   />
                   {resolveName(t.player, t.team) && <span className="journal-player-name">{resolveName(t.player, t.team)}</span>}
+                  <select className="journal-zone-select" value={t.zone || ""} onChange={(e) => setTagField(t.id, "zone", e.target.value)}>
+                    <option value="">Zone —</option>
+                    <option value="defensive">Déf.</option>
+                    <option value="mediane">Méd.</option>
+                    <option value="offensive">Off.</option>
+                  </select>
+                  <select className="journal-zone-select" value={t.couloir || ""} onChange={(e) => setTagField(t.id, "couloir", e.target.value)}>
+                    <option value="">Couloir —</option>
+                    <option value="gauche">Gauche</option>
+                    <option value="axe">Axe</option>
+                    <option value="droite">Droite</option>
+                  </select>
                   <button className="icon-btn" onClick={() => removeTag(t.id)} aria-label="Supprimer cette action">
                     <X size={12} />
                   </button>
@@ -3849,6 +4201,39 @@ const CSS = `
   .qcm-note-input { width: 100%; background: var(--bg); border: 1px solid var(--line); color: var(--ink); border-radius: 6px; padding: 7px 10px; font-size: 12px; }
   .gameplan-choice-tag { display: inline-block; background: rgba(227,178,60,0.14); color: var(--gold); border-radius: 14px; padding: 4px 12px; font-size: 12px; font-weight: 700; }
   .gameplan-view-note { font-size: 12px; color: var(--ink-muted); margin-top: 4px; font-style: italic; }
+
+  .match-report { max-width: 780px; }
+  .match-report-header { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 20px; text-align: center; margin-bottom: 14px; }
+  .match-report-title { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--ink-muted); font-weight: 700; margin-bottom: 10px; }
+  .match-report-score { display: flex; align-items: center; justify-content: center; gap: 20px; }
+  .match-report-score .us { color: var(--gold); font-weight: 700; font-size: 14px; }
+  .match-report-score .opp { color: var(--crimson); font-weight: 700; font-size: 14px; }
+  .match-report-score .score-num { font-size: 32px; font-weight: 800; color: var(--ink); }
+  .match-report-meta { font-size: 11px; color: var(--ink-muted); margin-top: 10px; }
+  .match-report-synthese { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px 18px; font-size: 13px; line-height: 1.7; color: var(--ink); margin-bottom: 6px; }
+
+  .compare-bars { display: flex; flex-direction: column; gap: 10px; }
+  .compare-bar-row { display: flex; align-items: center; gap: 12px; }
+  .compare-bar-val { font-size: 13px; font-weight: 800; width: 52px; flex-shrink: 0; }
+  .compare-bar-val.us { color: var(--gold); text-align: right; }
+  .compare-bar-val.opp { color: var(--crimson); text-align: left; }
+  .compare-bar-mid { flex: 1; min-width: 0; }
+  .compare-bar-label { font-size: 10px; color: var(--ink-muted); text-align: center; margin-bottom: 3px; }
+  .compare-bar-track { height: 6px; background: var(--crimson); border-radius: 3px; overflow: hidden; opacity: 0.85; }
+  .compare-bar-fill { height: 100%; background: var(--gold); }
+
+  .signals-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .signals-col-title { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; font-weight: 700; margin-bottom: 8px; }
+  .signals-col-title.positive { color: var(--gold); }
+  .signals-col-title.negative { color: var(--crimson); }
+
+  .reports-match-list { display: flex; flex-direction: column; gap: 6px; }
+  .reports-match-item { display: flex; align-items: center; gap: 14px; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 10px 14px; text-align: left; }
+  .reports-match-item:hover { border-color: var(--gold); }
+  .reports-match-item.active { border-color: var(--gold); background: rgba(227,178,60,0.08); }
+  .reports-match-name { flex: 1; font-size: 13px; font-weight: 600; }
+  .reports-match-score { font-size: 13px; font-weight: 800; color: var(--gold); }
+  .reports-match-date { font-size: 11px; color: var(--ink-muted); width: 90px; text-align: right; }
   .new-match-card select { background: var(--bg); border: 1px solid var(--line); color: var(--ink); border-radius: 6px; padding: 9px 10px; font-size: 14px; font-weight: 400; text-transform: none; letter-spacing: normal; }
   .form-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 4px; }
 
@@ -3971,6 +4356,7 @@ const CSS = `
   .journal-label { flex: 1; font-size: 13px; }
   .journal-label.neg { color: var(--ink-muted); }
   .player-input { width: 44px; background: var(--bg); border: 1px solid var(--line); color: var(--ink); border-radius: 4px; padding: 4px 6px; font-size: 12px; text-align: center; }
+  .journal-zone-select { background: var(--bg); border: 1px solid var(--line); color: var(--ink-muted); border-radius: 4px; padding: 4px 4px; font-size: 10px; max-width: 74px; }
   .journal-player-name { font-size: 11px; color: var(--gold); max-width: 90px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .player-picker-btn { display: flex; flex-direction: column; align-items: center; gap: 1px; }
   .player-picker-name { font-size: 8px; font-weight: 400; color: var(--ink-muted); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
