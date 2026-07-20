@@ -241,6 +241,22 @@ export default function App() {
   const currentMatchRef = useRef(null);
   currentMatchRef.current = currentMatch;
   const pendingTimeoutRef = useRef(null);
+  const currentTimeRef = useRef(0);
+  currentTimeRef.current = currentTime;
+
+  useEffect(() => {
+    if (!videoUrl) return;
+    const interval = setInterval(() => {
+      const m = currentMatchRef.current;
+      const t = currentTimeRef.current;
+      if (m && Math.abs((m.lastPosition || 0) - t) > 2) {
+        const next = { ...m, lastPosition: t };
+        writeMatch(next);
+        setCurrentMatch(next);
+      }
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [videoUrl]);
 
   useEffect(() => {
     setMatches(readIndex());
@@ -294,6 +310,7 @@ export default function App() {
       ratings: {},
       closed: false,
       playerAssignments: { ...newMatchForm.assignments },
+      lastPosition: 0,
     };
     writeMatch(match);
     persistIndexUpdate(match);
@@ -348,7 +365,7 @@ export default function App() {
     try {
       const raw = localStorage.getItem(matchStorageKey(summary.id));
       const parsed = raw ? JSON.parse(raw) : { ...summary, tags: [] };
-      const match = { ...parsed, tags: parsed.tags || [], possession: parsed.possession || [], ratings: parsed.ratings || {}, closed: !!parsed.closed, playerAssignments: parsed.playerAssignments || {} };
+      const match = { ...parsed, tags: parsed.tags || [], possession: parsed.possession || [], ratings: parsed.ratings || {}, closed: !!parsed.closed, playerAssignments: parsed.playerAssignments || {}, lastPosition: parsed.lastPosition || 0 };
       setCurrentMatch(match);
       setVideoUrl(null);
       setVideoDuration(0);
@@ -3758,6 +3775,7 @@ function TaggingScreen(props) {
             <div className="video-placeholder">
               <VideoIcon size={32} />
               <p>Charge la vidéo de ce match pour commencer à taguer.</p>
+              {match.lastPosition > 2 && <p className="resume-hint">La lecture reprendra automatiquement à {formatTime(match.lastPosition)}.</p>}
               <button type="button" className="btn btn-primary" onClick={() => fileInputRef.current && fileInputRef.current.click()}>
                 Choisir la vidéo
               </button>
@@ -3775,7 +3793,13 @@ function TaggingScreen(props) {
               <video
                 ref={videoRef}
                 src={videoUrl}
-                onLoadedMetadata={(e) => { setVideoDuration(e.target.duration); setVideoLoading(false); }}
+                onLoadedMetadata={(e) => {
+                  setVideoDuration(e.target.duration);
+                  setVideoLoading(false);
+                  if (match.lastPosition && match.lastPosition > 2 && match.lastPosition < e.target.duration - 1) {
+                    e.target.currentTime = match.lastPosition;
+                  }
+                }}
                 onTimeUpdate={(e) => setCurrentTime(e.target.currentTime)}
                 onPlay={() => setIsPlaying(true)}
                 onPause={() => setIsPlaying(false)}
@@ -4435,6 +4459,7 @@ const CSS = `
   .journal-section { max-width: 640px; }
 
   .video-placeholder { position: relative; background: var(--surface); border: 1px dashed var(--line); border-radius: 10px; padding: 48px 20px; text-align: center; color: var(--ink-muted); display: flex; flex-direction: column; align-items: center; gap: 14px; }
+  .resume-hint { font-size: 12px; color: var(--gold); margin-top: -8px; }
   .video-wrap { position: relative; background: black; border-radius: 10px; overflow: hidden; }
   .video-wrap video { width: 100%; display: block; max-height: 46vh; }
   .video-status { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center; padding: 24px; color: var(--ink-muted); font-size: 13px; line-height: 1.5; background: rgba(13,21,18,0.88); }
