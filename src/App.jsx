@@ -450,6 +450,10 @@ export default function App() {
     updateMatch((m) => ({ ...m, tags: m.tags.map((t) => (t.id === tagId ? { ...t, [field]: value } : t)) }));
   }
 
+  function setTagZoneCouloir(tagId, zone, couloir) {
+    updateMatch((m) => ({ ...m, tags: m.tags.map((t) => (t.id === tagId ? { ...t, zone, couloir } : t)) }));
+  }
+
   function setTeamRating(team, coachScore, comment) {
     updateMatch((m) => ({
       ...m,
@@ -622,6 +626,7 @@ export default function App() {
               removeTag={removeTag}
               setTagPlayer={setTagPlayer}
               setTagField={setTagField}
+              setTagZoneCouloir={setTagZoneCouloir}
           exportMatch={exportMatch}
           goHome={() => setScreen("home")}
           lastTagFlash={lastTagFlash}
@@ -3523,12 +3528,51 @@ function RatingColumn({ team, match, suggestions, players, setTeamRating, setPla
   );
 }
 
+const ZONE_RELEVANT_EVENTS = [
+  "passe_ok", "passe_ko", "controle_ok", "controle_ko", "centre_ok", "centre_ko",
+  "dribble_ok", "dribble_ko", "tir_cadre", "tir_hc",
+  "recup", "perte", "tacle_ok", "tacle_ko", "interception", "degagement", "duel_ok", "duel_ko",
+];
+
+function PitchPicker({ zone, couloir, onPick }) {
+  const zones = ["offensive", "mediane", "defensive"];
+  const couloirs = ["gauche", "axe", "droite"];
+  return (
+    <div className="pitch-picker">
+      <div className="pitch-picker-label">Zone de l'action</div>
+      <div className="pitch-field">
+        <div className="pitch-markings">
+          <div className="pitch-goal top" />
+          <div className="pitch-circle" />
+          <div className="pitch-halfline" />
+          <div className="pitch-goal bottom" />
+        </div>
+        <div className="pitch-cells">
+          {zones.map((z) => (
+            <div className="pitch-row" key={z}>
+              {couloirs.map((c) => (
+                <button
+                  key={`${z}_${c}`}
+                  type="button"
+                  className={`pitch-cell ${zone === z && couloir === c ? "selected" : ""}`}
+                  onClick={() => onPick(z, c)}
+                  aria-label={`${ZONE_LABELS[z]} — ${COULOIR_LABELS[c]}`}
+                />
+              ))}
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function TaggingScreen(props) {
   const {
     match, videoUrl, videoRef, videoDuration, setVideoDuration, currentTime, setCurrentTime,
     isPlaying, setIsPlaying, playbackRate, setPlaybackRate, activeTeam, setActiveTeam,
     saveStatus, handleFile, togglePlay, seekTo, nudge,
-    addTag, removeTag, setTagPlayer, setTagField, exportMatch, goHome, lastTagFlash,
+    addTag, removeTag, setTagPlayer, setTagField, setTagZoneCouloir, exportMatch, goHome, lastTagFlash,
     videoError, setVideoError, videoLoading, setVideoLoading,
     pendingPlayerTag, assignPendingPlayer, dismissPendingPlayer, setPossession,
     runCompilation, compilationJob, compilations, goRating, setMatchClosed, roster, setPlayerAssignments,
@@ -3736,25 +3780,36 @@ function TaggingScreen(props) {
         </div>
 
         <div className="selectors-col">
-          {pendingPlayerTag && (
-            <div className={`player-picker ${pendingPlayerTag.team}`}>
-              <div className="player-picker-label">
-                Quel joueur ? <span className="player-picker-team">{pendingPlayerTag.team === "us" ? "Nous" : "Adversaire"}</span>
+          {pendingPlayerTag && (() => {
+            const pendingTag = match.tags.find((t) => t.id === pendingPlayerTag.tagId);
+            const showZonePicker = pendingTag && ZONE_RELEVANT_EVENTS.includes(pendingTag.eventKey);
+            return (
+              <div className={`player-picker ${pendingPlayerTag.team}`}>
+                <div className="player-picker-label">
+                  Quel joueur ? <span className="player-picker-team">{pendingPlayerTag.team === "us" ? "Nous" : "Adversaire"}</span>
+                </div>
+                {showZonePicker && (
+                  <PitchPicker
+                    zone={pendingTag.zone}
+                    couloir={pendingTag.couloir}
+                    onPick={(zone, couloir) => setTagZoneCouloir(pendingTag.id, zone, couloir)}
+                  />
+                )}
+                <div className="player-picker-grid">
+                  {Array.from({ length: 20 }, (_, i) => i + 1).map((n) => {
+                    const name = pendingPlayerTag.team === "us" ? resolveName(String(n), "us") : null;
+                    return (
+                      <button key={n} className="player-picker-btn" onClick={() => assignPendingPlayer(n)}>
+                        {n}
+                        {name && <span className="player-picker-name">{name}</span>}
+                      </button>
+                    );
+                  })}
+                </div>
+                <button className="player-picker-skip" onClick={dismissPendingPlayer}>Passer</button>
               </div>
-              <div className="player-picker-grid">
-                {Array.from({ length: 20 }, (_, i) => i + 1).map((n) => {
-                  const name = pendingPlayerTag.team === "us" ? resolveName(String(n), "us") : null;
-                  return (
-                    <button key={n} className="player-picker-btn" onClick={() => assignPendingPlayer(n)}>
-                      {n}
-                      {name && <span className="player-picker-name">{name}</span>}
-                    </button>
-                  );
-                })}
-              </div>
-              <button className="player-picker-skip" onClick={dismissPendingPlayer}>Passer</button>
-            </div>
-          )}
+            );
+          })()}
 
           <div className="selectors-header">
             <div className="team-toggle">
@@ -4397,6 +4452,20 @@ const CSS = `
   .player-picker { background: var(--surface); border: 1px solid var(--gold); border-radius: 8px; padding: 10px; animation: pop-in 0.15s ease; }
   .player-picker.opp { border-color: var(--crimson); }
   .player-picker-label { font-size: 12px; font-weight: 700; color: var(--ink); margin-bottom: 8px; }
+  .pitch-picker { margin-bottom: 12px; }
+  .pitch-picker-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-muted); font-weight: 700; margin-bottom: 6px; }
+  .pitch-field { position: relative; width: 100%; max-width: 190px; aspect-ratio: 68 / 100; margin: 0 auto; background: #1F7A3D; border: 2px solid rgba(255,255,255,0.85); border-radius: 4px; overflow: hidden; }
+  .pitch-markings { position: absolute; inset: 0; pointer-events: none; }
+  .pitch-goal { position: absolute; left: 50%; transform: translateX(-50%); width: 42%; height: 9%; border: 2px solid rgba(255,255,255,0.55); }
+  .pitch-goal.top { top: -2px; border-top: none; }
+  .pitch-goal.bottom { bottom: -2px; border-bottom: none; }
+  .pitch-circle { position: absolute; top: 50%; left: 50%; width: 28%; aspect-ratio: 1; border: 2px solid rgba(255,255,255,0.55); border-radius: 50%; transform: translate(-50%, -50%); }
+  .pitch-halfline { position: absolute; top: 50%; left: 0; right: 0; height: 2px; background: rgba(255,255,255,0.55); }
+  .pitch-cells { position: relative; display: flex; flex-direction: column; height: 100%; }
+  .pitch-row { flex: 1; display: flex; }
+  .pitch-cell { flex: 1; background: transparent; border: 1px dashed rgba(255,255,255,0.3); }
+  .pitch-cell:hover { background: rgba(227,178,60,0.3); }
+  .pitch-cell.selected { background: rgba(227,178,60,0.6); border-color: var(--gold); border-style: solid; }
   .player-picker-team { color: var(--gold); }
   .player-picker.opp .player-picker-team { color: var(--crimson); }
   .player-picker-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 5px; }
