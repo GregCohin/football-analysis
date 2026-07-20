@@ -581,9 +581,7 @@ export default function App() {
       {section === "observation" && (
         <PlaceholderScreen title="Observation" description="Rapports de forces/faiblesses sur les adversaires à venir, à partir des matchs observés." />
       )}
-      {section === "scouting" && (
-        <PlaceholderScreen title="Scouting" description="Notation des joueurs adverses selon ton projet de jeu, en vue d'un recrutement." />
-      )}
+      {section === "scouting" && <ScoutingScreen matches={matches} />}
       {section === "videotheque" && (
         <PlaceholderScreen title="Vidéothèque" description="Toutes les compilations générées, organisées et retrouvables au même endroit." />
       )}
@@ -2390,6 +2388,255 @@ function ReportsScreen({ matches }) {
           </div>
         </>
       )}
+    </div>
+  );
+}
+
+const LETTER_GRADES = [
+  { min: 90, label: "A+" }, { min: 85, label: "A" }, { min: 80, label: "A-" },
+  { min: 75, label: "B+" }, { min: 70, label: "B" }, { min: 65, label: "B-" },
+  { min: 60, label: "C+" }, { min: 55, label: "C" }, { min: 50, label: "C-" },
+  { min: 45, label: "D+" }, { min: 40, label: "D" }, { min: 35, label: "D-" },
+  { min: 0, label: "F" },
+];
+
+function scoreToGrade(score) {
+  for (const g of LETTER_GRADES) {
+    if (score >= g.min) return g.label;
+  }
+  return "F";
+}
+
+function gradeClass(grade) {
+  if (!grade) return "";
+  if (grade.startsWith("A")) return "grade-a";
+  if (grade.startsWith("B")) return "grade-b";
+  if (grade.startsWith("C")) return "grade-c";
+  if (grade.startsWith("D")) return "grade-d";
+  return "grade-f";
+}
+
+function computeScoutedPlayerTags(scoutedPlayer, allFullMatches) {
+  const tags = [];
+  (scoutedPlayer.observations || []).forEach((obs) => {
+    const match = allFullMatches.find((m) => m.id === obs.matchId);
+    if (!match) return;
+    match.tags.forEach((t) => {
+      if (t.team === "opp" && t.player === obs.number) tags.push(t);
+    });
+  });
+  return tags;
+}
+
+function computeFitScore(radarValues, axes, gameplan, position) {
+  const profile = gameplan.postProfiles && gameplan.postProfiles[position];
+  if (!profile) return null;
+  let weightedSum = 0;
+  let weightTotal = 0;
+  axes.forEach((axis, i) => {
+    const importance = profile[axis.key] != null ? profile[axis.key] : 0;
+    weightedSum += importance * radarValues[i].value;
+    weightTotal += importance;
+  });
+  return weightTotal > 0 ? Math.round(weightedSum / weightTotal) : null;
+}
+
+function emptyScoutForm() {
+  return { name: "", club: "", position: "Attaquant", notes: "", observations: [] };
+}
+
+function ScoutingScreen({ matches }) {
+  const [scouted, setScouted] = useState([]);
+  const [allFullMatches, setAllFullMatches] = useState([]);
+  const [gameplan, setGameplan] = useState(emptyGameplanData());
+  const [loaded, setLoaded] = useState(false);
+  const [showForm, setShowForm] = useState(false);
+  const [editingId, setEditingId] = useState(null);
+  const [form, setForm] = useState(emptyScoutForm());
+  const [obsMatchId, setObsMatchId] = useState("");
+  const [obsNumber, setObsNumber] = useState("");
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem("tf_scouting");
+      setScouted(raw ? JSON.parse(raw) : []);
+    } catch (e) {
+      setScouted([]);
+    }
+    try {
+      const rawGp = localStorage.getItem("tf_gameplan");
+      if (rawGp) setGameplan({ ...emptyGameplanData(), ...JSON.parse(rawGp) });
+    } catch (e) {}
+    setLoaded(true);
+  }, []);
+
+  useEffect(() => {
+    const full = matches
+      .map((m) => {
+        try {
+          const raw = localStorage.getItem(matchStorageKey(m.id));
+          return raw ? JSON.parse(raw) : null;
+        } catch (e) {
+          return null;
+        }
+      })
+      .filter((m) => m && m.closed)
+      .sort((a, b) => new Date(a.date) - new Date(b.date));
+    setAllFullMatches(full);
+  }, [matches]);
+
+  function persist(next) {
+    setScouted(next);
+    try {
+      localStorage.setItem("tf_scouting", JSON.stringify(next));
+    } catch (e) {
+      alert("La sauvegarde a échoué.");
+    }
+  }
+
+  function openNewForm() {
+    setForm(emptyScoutForm());
+    setEditingId(null);
+    setObsMatchId("");
+    setObsNumber("");
+    setShowForm(true);
+  }
+  function openEditForm(p) {
+    setForm({ name: p.name || "", club: p.club || "", position: p.position || "Attaquant", notes: p.notes || "", observations: p.observations || [] });
+    setEditingId(p.id);
+    setObsMatchId("");
+    setObsNumber("");
+    setShowForm(true);
+  }
+  function saveScouted() {
+    if (!form.name.trim() && !form.club.trim()) {
+      alert("Renseigne au moins un nom ou un club pour identifier ce joueur.");
+      return;
+    }
+    if (editingId) {
+      persist(scouted.map((p) => (p.id === editingId ? { ...p, ...form } : p)));
+    } else {
+      persist([...scouted, { id: newId(), ...form }]);
+    }
+    setShowForm(false);
+  }
+  function deleteScouted(id) {
+    if (!confirm("Supprimer ce joueur repéré de la liste de scouting ?")) return;
+    persist(scouted.filter((p) => p.id !== id));
+  }
+  function addObservation() {
+    if (!obsMatchId || !obsNumber) {
+      alert("Choisis un match et un numéro.");
+      return;
+    }
+    if (form.observations.some((o) => o.matchId === obsMatchId && o.number === obsNumber)) {
+      alert("Cette observation est déjà ajoutée.");
+      return;
+    }
+    setForm((f) => ({ ...f, observations: [...f.observations, { matchId: obsMatchId, number: obsNumber }] }));
+    setObsNumber("");
+  }
+  function removeObservation(idx) {
+    setForm((f) => ({ ...f, observations: f.observations.filter((_, i) => i !== idx) }));
+  }
+
+  const obsMatch = allFullMatches.find((m) => m.id === obsMatchId);
+  const obsNumbers = obsMatch ? Array.from(new Set(obsMatch.tags.filter((t) => t.team === "opp" && t.player).map((t) => t.player))).sort((a, b) => Number(a) - Number(b)) : [];
+
+  const enriched = useMemo(() => {
+    return scouted
+      .map((p) => {
+        const tags = computeScoutedPlayerTags(p, allFullMatches);
+        const radarValues = computeRadarValues(tags, RADAR_AXES);
+        const fitScore = tags.length > 0 ? computeFitScore(radarValues, RADAR_AXES, gameplan, p.position) : null;
+        const grade = fitScore != null ? scoreToGrade(fitScore) : null;
+        return { ...p, radarValues, totalActions: tags.length, fitScore, grade };
+      })
+      .sort((a, b) => (b.fitScore || -1) - (a.fitScore || -1));
+  }, [scouted, allFullMatches, gameplan]);
+
+  return (
+    <div className="stats-screen">
+      <div className="stats-screen-header">
+        <div className="eyebrow">Assistant coaching</div>
+        <h1>Scouting</h1>
+        <p className="subtitle">Joueurs adverses repérés dans tes matchs, notés selon l'adéquation avec les profils de poste de ton Projet de jeu.</p>
+      </div>
+
+      {!showForm && (
+        <button className="btn btn-primary btn-large" onClick={openNewForm} style={{ marginBottom: 20 }}>+ Ajouter un joueur observé</button>
+      )}
+
+      {showForm && (
+        <div className="new-match-card">
+          <label>Nom (si connu)<input type="text" placeholder="ex. Inconnu, ou son nom si tu le connais" value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} /></label>
+          <label>Club observé<input type="text" placeholder="ex. FC Rival" value={form.club} onChange={(e) => setForm((f) => ({ ...f, club: e.target.value }))} /></label>
+          <label>
+            Poste
+            <select value={form.position} onChange={(e) => setForm((f) => ({ ...f, position: e.target.value }))}>
+              {PROFILE_POSITIONS.map((pos) => <option key={pos} value={pos}>{pos}</option>)}
+            </select>
+          </label>
+          <label>Notes (optionnel)<textarea rows={2} value={form.notes} onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))} /></label>
+
+          <div className="roster-form-section-title">Observations (match + numéro porté ce jour-là)</div>
+          {form.observations.length > 0 && (
+            <div className="scout-obs-list">
+              {form.observations.map((o, i) => {
+                const m = allFullMatches.find((mm) => mm.id === o.matchId);
+                return (
+                  <div className="scout-obs-row" key={i}>
+                    <span>{m ? m.name : "Match introuvable"} — n°{o.number}</span>
+                    <button className="icon-btn" onClick={() => removeObservation(i)} aria-label="Retirer"><X size={12} /></button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          <div className="scout-obs-add">
+            <select value={obsMatchId} onChange={(e) => { setObsMatchId(e.target.value); setObsNumber(""); }}>
+              <option value="">Choisir un match…</option>
+              {allFullMatches.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+            </select>
+            <select value={obsNumber} onChange={(e) => setObsNumber(e.target.value)} disabled={!obsMatchId}>
+              <option value="">N° adverse…</option>
+              {obsNumbers.map((n) => <option key={n} value={n}>n°{n}</option>)}
+            </select>
+            <button className="btn btn-ghost btn-small" onClick={addObservation}>+ Ajouter</button>
+          </div>
+
+          <div className="form-actions">
+            <button className="btn btn-ghost" onClick={() => setShowForm(false)}>Annuler</button>
+            <button className="btn btn-primary" onClick={saveScouted}>Enregistrer</button>
+          </div>
+        </div>
+      )}
+
+      {loaded && enriched.length === 0 && !showForm && (
+        <div className="empty-state">Aucun joueur observé pour l'instant — ajoute ta première fiche à partir d'un match déjà clôturé.</div>
+      )}
+
+      <div className="scouting-list">
+        {enriched.map((p) => (
+          <div className="scouting-card" key={p.id}>
+            <div className={`scouting-grade ${gradeClass(p.grade)}`}>{p.grade || "—"}</div>
+            <div className="scouting-info">
+              <div className="scouting-name">{p.name || "Joueur non identifié"} <span className="scouting-club">{p.club}</span></div>
+              <div className="scouting-meta">{p.position} · {p.totalActions} actions sur {p.observations.length} observation{p.observations.length > 1 ? "s" : ""}</div>
+              {p.fitScore != null ? (
+                <div className="scouting-meta">Adéquation Projet de jeu : {p.fitScore}/100</div>
+              ) : (
+                <div className="scouting-meta gameplan-empty">{p.totalActions === 0 ? "Aucune action tagée pour l'instant" : "Renseigne le profil de ce poste dans Projet de jeu pour obtenir une note"}</div>
+              )}
+              {p.notes && <div className="scouting-meta">{p.notes}</div>}
+            </div>
+            <div className="roster-card-actions">
+              <button className="btn btn-ghost btn-small" onClick={() => openEditForm(p)}>Modifier</button>
+              <button className="icon-btn" onClick={() => deleteScouted(p.id)} aria-label="Supprimer"><X size={14} /></button>
+            </div>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -4374,6 +4621,24 @@ const CSS = `
   .reports-match-name { flex: 1; font-size: 13px; font-weight: 600; }
   .reports-match-score { font-size: 13px; font-weight: 800; color: var(--gold); }
   .reports-match-date { font-size: 11px; color: var(--ink-muted); width: 90px; text-align: right; }
+
+  .scout-obs-list { display: flex; flex-direction: column; gap: 4px; }
+  .scout-obs-row { display: flex; align-items: center; justify-content: space-between; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; font-size: 12px; }
+  .scout-obs-add { display: flex; gap: 8px; flex-wrap: wrap; }
+  .scout-obs-add select { background: var(--bg); border: 1px solid var(--line); color: var(--ink); border-radius: 6px; padding: 7px 10px; font-size: 12px; }
+
+  .scouting-list { display: flex; flex-direction: column; gap: 10px; }
+  .scouting-card { display: flex; gap: 16px; align-items: center; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
+  .scouting-grade { width: 48px; height: 48px; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 16px; font-weight: 800; flex-shrink: 0; background: var(--bg); border: 2px solid var(--line); }
+  .scouting-grade.grade-a { border-color: #4CAF7D; color: #4CAF7D; }
+  .scouting-grade.grade-b { border-color: var(--gold); color: var(--gold); }
+  .scouting-grade.grade-c { border-color: #D6A23C; color: #D6A23C; }
+  .scouting-grade.grade-d { border-color: #D6813F; color: #D6813F; }
+  .scouting-grade.grade-f { border-color: var(--crimson); color: var(--crimson); }
+  .scouting-info { flex: 1; min-width: 0; }
+  .scouting-name { font-weight: 700; font-size: 14px; }
+  .scouting-club { font-weight: 400; color: var(--ink-muted); font-size: 12px; margin-left: 6px; }
+  .scouting-meta { font-size: 11px; color: var(--ink-muted); margin-top: 3px; }
   .new-match-card select { background: var(--bg); border: 1px solid var(--line); color: var(--ink); border-radius: 6px; padding: 9px 10px; font-size: 14px; font-weight: 400; text-transform: none; letter-spacing: normal; }
   .form-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 4px; }
 
