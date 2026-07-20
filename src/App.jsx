@@ -1713,6 +1713,75 @@ function CompetitionsScreen() {
 
 const PROFILE_POSITIONS = ["Gardien", "Défenseur central", "Latéral", "Milieu défensif", "Milieu axial", "Milieu offensif", "Ailier", "Avant-centre"];
 
+const SYSTEM_OPTIONS = ["4-3-3", "4-4-2", "4-2-3-1", "3-5-2", "5-3-2", "3-4-3", "4-1-4-1", "Autre"];
+const CONSTRUCTION_OPTIONS = ["Construction courte depuis le gardien", "Construction mixte (courte puis longue selon pression)", "Jeu direct/long systématique", "Relance variable selon l'adversaire"];
+const PROGRESSION_OPTIONS = ["Jeu au sol, construction patiente", "Jeu dans les couloirs (débordements)", "Jeu dans l'axe (combinaisons courtes)", "Jeu direct vers l'attaquant de pointe", "Contre-attaque rapide après récupération"];
+const FINITION_OPTIONS = ["Recherche du un-contre-un", "Jeu de combinaisons et centres", "Tirs de loin privilégiés", "Recherche systématique de la surface"];
+const HAUTEUR_BLOC_OPTIONS = ["Bloc haut (pressing tout terrain)", "Bloc médian", "Bloc bas (regroupé)", "Variable selon l'adversaire"];
+const PRESSING_OPTIONS = ["Pressing individuel homme à homme", "Pressing collectif à déclenchement", "Pressing orienté (pièges sur les côtés)", "Attentiste, pas de pressing structuré"];
+const ORGANISATION_OPTIONS = ["Marquage individuel strict", "Défense de zone", "Marquage mixte (zone + individuel sur points chauds)"];
+const TRANSITION_OFF_OPTIONS = ["Contre-attaque immédiate (verticalité)", "Conservation du ballon / temporisation", "Selon le nombre de joueurs disponibles à la récupération"];
+const TRANSITION_DEF_OPTIONS = ["Contre-pressing immédiat pour récupérer", "Repli défensif rapide et regroupement", "Faute tactique si besoin"];
+const TOUCHE_DEF_OPTIONS = ["Dégagement / jeu long sécurisé", "Jeu court vers le gardien ou un défenseur proche", "Selon la pression adverse"];
+const TOUCHE_MED_OPTIONS = ["Jeu court pour conserver", "Jeu rapide vers l'avant", "Selon la situation de match"];
+const TOUCHE_OFF_OPTIONS = ["Touche rapidement jouée", "Touche organisée comme un corner (bloc dans la surface)", "Combinaison courte préparée"];
+const CF_DEF_OPTIONS = ["Dégagement direct", "Relance courte sécurisée"];
+const CF_MED_OPTIONS = ["Jeu rapide vers l'avant", "Jeu construit, conservation"];
+const CF_OFF_OPTIONS = ["Tir direct si possible", "Centre dans la surface", "Combinaison courte préparée"];
+const CORNER_OFF_OPTIONS = ["Tous au marquage/attaque du ballon", "Quelques joueurs restent en couverture", "Combinaison courte au sol"];
+const CORNER_DEF_OPTIONS = ["Marquage individuel strict", "Marquage de zone", "Mixte (individuel + zone sur points clés)"];
+const PENALTY_OPTIONS = ["Tireur unique désigné", "Ordre de plusieurs tireurs prédéfini", "Décision au moment du match"];
+
+function qcmChoice(value) {
+  return value && typeof value === "object" ? value.choice || "" : (typeof value === "string" ? "" : "");
+}
+function qcmNote(value) {
+  return value && typeof value === "object" ? value.note || "" : (typeof value === "string" ? value : "");
+}
+
+function QCMField({ label, options, value, setValue, placeholder }) {
+  const choice = qcmChoice(value);
+  const note = qcmNote(value);
+  return (
+    <div className="qcm-field">
+      <div className="qcm-label">{label}</div>
+      <div className="qcm-options">
+        {options.map((opt) => (
+          <button
+            key={opt}
+            type="button"
+            className={`qcm-option ${choice === opt ? "selected" : ""}`}
+            onClick={() => setValue({ choice: opt, note })}
+          >
+            {opt}
+          </button>
+        ))}
+      </div>
+      <input
+        type="text"
+        className="qcm-note-input"
+        placeholder={placeholder || "Précision libre (optionnel)"}
+        value={note}
+        onChange={(e) => setValue({ choice, note: e.target.value })}
+      />
+    </div>
+  );
+}
+
+function ViewQCMField({ label, value }) {
+  const choice = qcmChoice(value);
+  const note = qcmNote(value);
+  return (
+    <div className="gameplan-view-field">
+      <div className="gameplan-view-label">{label}</div>
+      <div className="gameplan-view-value">
+        {choice ? <span className="gameplan-choice-tag">{choice}</span> : <span className="gameplan-empty">Pas encore renseigné</span>}
+        {note && <div className="gameplan-view-note">{note}</div>}
+      </div>
+    </div>
+  );
+}
+
 function emptyGameplanData() {
   const postProfiles = {};
   PROFILE_POSITIONS.forEach((pos) => {
@@ -1810,33 +1879,33 @@ function GameplanScreen() {
           <div className="gameplan-identity-banner">{data.identity || <span className="gameplan-empty">Identité pas encore renseignée</span>}</div>
 
           <div className="panel-heading">Système de jeu</div>
-          <ViewField label="Système principal" value={data.system} />
+          <ViewQCMField label="Système principal" value={data.system} />
           <ViewField label="Variantes" value={data.systemVariants} />
 
           <div className="panel-heading" style={{ marginTop: 20 }}>Phase offensive</div>
-          <ViewField label="Construction" value={data.offensive.construction} />
-          <ViewField label="Progression" value={data.offensive.progression} />
-          <ViewField label="Finition" value={data.offensive.finition} />
+          <ViewQCMField label="Construction" value={data.offensive.construction} />
+          <ViewQCMField label="Progression" value={data.offensive.progression} />
+          <ViewQCMField label="Finition" value={data.offensive.finition} />
 
           <div className="panel-heading" style={{ marginTop: 20 }}>Phase défensive</div>
-          <ViewField label="Hauteur du bloc" value={data.defensive.hauteurBloc} />
-          <ViewField label="Pressing" value={data.defensive.pressing} />
-          <ViewField label="Organisation" value={data.defensive.organisation} />
+          <ViewQCMField label="Hauteur du bloc" value={data.defensive.hauteurBloc} />
+          <ViewQCMField label="Pressing" value={data.defensive.pressing} />
+          <ViewQCMField label="Organisation" value={data.defensive.organisation} />
 
           <div className="panel-heading" style={{ marginTop: 20 }}>Transitions</div>
-          <ViewField label="Transition offensive (à la récupération)" value={data.transitionOff} />
-          <ViewField label="Transition défensive (à la perte)" value={data.transitionDef} />
+          <ViewQCMField label="Transition offensive (à la récupération)" value={data.transitionOff} />
+          <ViewQCMField label="Transition défensive (à la perte)" value={data.transitionDef} />
 
           <div className="panel-heading" style={{ marginTop: 20 }}>Coups de pied arrêtés</div>
-          <ViewField label="Touches — zone défensive" value={data.cpa.touchesDef} />
-          <ViewField label="Touches — zone médiane" value={data.cpa.touchesMed} />
-          <ViewField label="Touches — zone offensive" value={data.cpa.touchesOff} />
-          <ViewField label="Coup franc — zone défensive" value={data.cpa.cfDef} />
-          <ViewField label="Coup franc — zone médiane" value={data.cpa.cfMed} />
-          <ViewField label="Coup franc — zone offensive" value={data.cpa.cfOff} />
-          <ViewField label="Corner offensif" value={data.cpa.cornerOff} />
-          <ViewField label="Corner défensif" value={data.cpa.cornerDef} />
-          <ViewField label="Penalty" value={data.cpa.penalty} />
+          <ViewQCMField label="Touches — zone défensive" value={data.cpa.touchesDef} />
+          <ViewQCMField label="Touches — zone médiane" value={data.cpa.touchesMed} />
+          <ViewQCMField label="Touches — zone offensive" value={data.cpa.touchesOff} />
+          <ViewQCMField label="Coup franc — zone défensive" value={data.cpa.cfDef} />
+          <ViewQCMField label="Coup franc — zone médiane" value={data.cpa.cfMed} />
+          <ViewQCMField label="Coup franc — zone offensive" value={data.cpa.cfOff} />
+          <ViewQCMField label="Corner offensif" value={data.cpa.cornerOff} />
+          <ViewQCMField label="Corner défensif" value={data.cpa.cornerDef} />
+          <ViewQCMField label="Penalty" value={data.cpa.penalty} />
 
           <div className="panel-heading" style={{ marginTop: 20 }}>Profils de poste recherchés</div>
           <div className="table-scroll">
@@ -1870,41 +1939,41 @@ function GameplanScreen() {
 
           <div className="panel-heading" style={{ marginTop: 20 }}>Système de jeu</div>
           <div className="new-match-card">
-            <label>Système principal<input type="text" placeholder="ex. 4-3-3" value={data.system} onChange={(e) => update(null, "system", e.target.value)} /></label>
+            <QCMField label="Système principal" options={SYSTEM_OPTIONS} value={data.system} setValue={(v) => update(null, "system", v)} />
             <label>Variantes (optionnel)<textarea rows={2} placeholder="ex. 4-2-3-1 en phase défensive basse" value={data.systemVariants} onChange={(e) => update(null, "systemVariants", e.target.value)} /></label>
           </div>
 
           <div className="panel-heading" style={{ marginTop: 20 }}>Phase offensive</div>
           <div className="new-match-card">
-            <label>Construction<textarea rows={2} placeholder="Comment on sort le ballon depuis le gardien/la défense" value={data.offensive.construction} onChange={(e) => update("offensive", "construction", e.target.value)} /></label>
-            <label>Progression<textarea rows={2} placeholder="Comment le ballon avance vers le camp adverse" value={data.offensive.progression} onChange={(e) => update("offensive", "progression", e.target.value)} /></label>
-            <label>Finition<textarea rows={2} placeholder="Comment on cherche à conclure les actions" value={data.offensive.finition} onChange={(e) => update("offensive", "finition", e.target.value)} /></label>
+            <QCMField label="Construction" options={CONSTRUCTION_OPTIONS} value={data.offensive.construction} setValue={(v) => update("offensive", "construction", v)} />
+            <QCMField label="Progression" options={PROGRESSION_OPTIONS} value={data.offensive.progression} setValue={(v) => update("offensive", "progression", v)} />
+            <QCMField label="Finition" options={FINITION_OPTIONS} value={data.offensive.finition} setValue={(v) => update("offensive", "finition", v)} />
           </div>
 
           <div className="panel-heading" style={{ marginTop: 20 }}>Phase défensive</div>
           <div className="new-match-card">
-            <label>Hauteur du bloc<textarea rows={2} placeholder="Bloc haut / médian / bas" value={data.defensive.hauteurBloc} onChange={(e) => update("defensive", "hauteurBloc", e.target.value)} /></label>
-            <label>Pressing<textarea rows={2} placeholder="Déclenchement, orientation, pièges à ballon" value={data.defensive.pressing} onChange={(e) => update("defensive", "pressing", e.target.value)} /></label>
-            <label>Organisation<textarea rows={2} placeholder="Marquage individuel / zone / mixte" value={data.defensive.organisation} onChange={(e) => update("defensive", "organisation", e.target.value)} /></label>
+            <QCMField label="Hauteur du bloc" options={HAUTEUR_BLOC_OPTIONS} value={data.defensive.hauteurBloc} setValue={(v) => update("defensive", "hauteurBloc", v)} />
+            <QCMField label="Pressing" options={PRESSING_OPTIONS} value={data.defensive.pressing} setValue={(v) => update("defensive", "pressing", v)} />
+            <QCMField label="Organisation" options={ORGANISATION_OPTIONS} value={data.defensive.organisation} setValue={(v) => update("defensive", "organisation", v)} />
           </div>
 
           <div className="panel-heading" style={{ marginTop: 20 }}>Transitions</div>
           <div className="new-match-card">
-            <label>Transition offensive — à la récupération<textarea rows={2} value={data.transitionOff} onChange={(e) => update(null, "transitionOff", e.target.value)} /></label>
-            <label>Transition défensive — à la perte<textarea rows={2} value={data.transitionDef} onChange={(e) => update(null, "transitionDef", e.target.value)} /></label>
+            <QCMField label="Transition offensive — à la récupération" options={TRANSITION_OFF_OPTIONS} value={data.transitionOff} setValue={(v) => update(null, "transitionOff", v)} />
+            <QCMField label="Transition défensive — à la perte" options={TRANSITION_DEF_OPTIONS} value={data.transitionDef} setValue={(v) => update(null, "transitionDef", v)} />
           </div>
 
           <div className="panel-heading" style={{ marginTop: 20 }}>Coups de pied arrêtés</div>
           <div className="new-match-card">
-            <label>Touches — zone défensive<textarea rows={2} value={data.cpa.touchesDef} onChange={(e) => update("cpa", "touchesDef", e.target.value)} /></label>
-            <label>Touches — zone médiane<textarea rows={2} value={data.cpa.touchesMed} onChange={(e) => update("cpa", "touchesMed", e.target.value)} /></label>
-            <label>Touches — zone offensive<textarea rows={2} value={data.cpa.touchesOff} onChange={(e) => update("cpa", "touchesOff", e.target.value)} /></label>
-            <label>Coup franc — zone défensive<textarea rows={2} value={data.cpa.cfDef} onChange={(e) => update("cpa", "cfDef", e.target.value)} /></label>
-            <label>Coup franc — zone médiane<textarea rows={2} value={data.cpa.cfMed} onChange={(e) => update("cpa", "cfMed", e.target.value)} /></label>
-            <label>Coup franc — zone offensive<textarea rows={2} value={data.cpa.cfOff} onChange={(e) => update("cpa", "cfOff", e.target.value)} /></label>
-            <label>Corner offensif<textarea rows={2} placeholder="Qui monte, organisation des courses" value={data.cpa.cornerOff} onChange={(e) => update("cpa", "cornerOff", e.target.value)} /></label>
-            <label>Corner défensif<textarea rows={2} placeholder="Marquage individuel / zone / mixte" value={data.cpa.cornerDef} onChange={(e) => update("cpa", "cornerDef", e.target.value)} /></label>
-            <label>Penalty<textarea rows={2} placeholder="Tireur désigné, ordre s'il y en a plusieurs" value={data.cpa.penalty} onChange={(e) => update("cpa", "penalty", e.target.value)} /></label>
+            <QCMField label="Touches — zone défensive" options={TOUCHE_DEF_OPTIONS} value={data.cpa.touchesDef} setValue={(v) => update("cpa", "touchesDef", v)} />
+            <QCMField label="Touches — zone médiane" options={TOUCHE_MED_OPTIONS} value={data.cpa.touchesMed} setValue={(v) => update("cpa", "touchesMed", v)} />
+            <QCMField label="Touches — zone offensive" options={TOUCHE_OFF_OPTIONS} value={data.cpa.touchesOff} setValue={(v) => update("cpa", "touchesOff", v)} />
+            <QCMField label="Coup franc — zone défensive" options={CF_DEF_OPTIONS} value={data.cpa.cfDef} setValue={(v) => update("cpa", "cfDef", v)} />
+            <QCMField label="Coup franc — zone médiane" options={CF_MED_OPTIONS} value={data.cpa.cfMed} setValue={(v) => update("cpa", "cfMed", v)} />
+            <QCMField label="Coup franc — zone offensive" options={CF_OFF_OPTIONS} value={data.cpa.cfOff} setValue={(v) => update("cpa", "cfOff", v)} />
+            <QCMField label="Corner offensif" options={CORNER_OFF_OPTIONS} value={data.cpa.cornerOff} setValue={(v) => update("cpa", "cornerOff", v)} />
+            <QCMField label="Corner défensif" options={CORNER_DEF_OPTIONS} value={data.cpa.cornerDef} setValue={(v) => update("cpa", "cornerDef", v)} />
+            <QCMField label="Penalty" options={PENALTY_OPTIONS} value={data.cpa.penalty} setValue={(v) => update("cpa", "penalty", v)} />
           </div>
 
           <div className="panel-heading" style={{ marginTop: 20 }}>Profils de poste recherchés</div>
@@ -3771,6 +3840,15 @@ const CSS = `
   .gameplan-view-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-muted); font-weight: 700; margin-bottom: 3px; }
   .gameplan-view-value { font-size: 13px; color: var(--ink); line-height: 1.5; white-space: pre-wrap; }
   .gameplan-empty { color: var(--ink-muted); font-style: italic; }
+  .qcm-field { margin-bottom: 4px; }
+  .qcm-label { font-size: 12px; color: var(--ink-muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 8px; }
+  .qcm-options { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+  .qcm-option { background: var(--bg); border: 1px solid var(--line); color: var(--ink); border-radius: 20px; padding: 8px 14px; font-size: 12px; font-weight: 500; text-align: left; }
+  .qcm-option:hover { border-color: var(--gold); }
+  .qcm-option.selected { background: var(--gold); border-color: var(--gold); color: var(--gold-ink); font-weight: 700; }
+  .qcm-note-input { width: 100%; background: var(--bg); border: 1px solid var(--line); color: var(--ink); border-radius: 6px; padding: 7px 10px; font-size: 12px; }
+  .gameplan-choice-tag { display: inline-block; background: rgba(227,178,60,0.14); color: var(--gold); border-radius: 14px; padding: 4px 12px; font-size: 12px; font-weight: 700; }
+  .gameplan-view-note { font-size: 12px; color: var(--ink-muted); margin-top: 4px; font-style: italic; }
   .new-match-card select { background: var(--bg); border: 1px solid var(--line); color: var(--ink); border-radius: 6px; padding: 9px 10px; font-size: 14px; font-weight: 400; text-transform: none; letter-spacing: normal; }
   .form-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 4px; }
 
