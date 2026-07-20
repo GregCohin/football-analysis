@@ -403,7 +403,7 @@ export default function App() {
   function addTag(eventKey) {
     if (!currentMatchRef.current || !videoRef.current) return;
     const t = videoRef.current.currentTime;
-    const tag = { id: newId(), time: t, eventKey, team: activeTeam, player: "", zone: "", couloir: "" };
+    const tag = { id: newId(), time: t, eventKey, team: activeTeam, player: "", zone: "", couloir: "", direction: "" };
     updateMatch((m) => ({ ...m, tags: [...m.tags, tag].sort((a, b) => a.time - b.time) }));
     setLastTagFlash(tag.id);
     setTimeout(() => setLastTagFlash((cur) => (cur === tag.id ? null : cur)), 500);
@@ -2073,6 +2073,13 @@ function computeMatchReport(match) {
   const hasCouloirData = match.tags.some((t) => t.couloir);
   const couloirTotal = Object.values(byCouloir).reduce((a, b) => a + b, 0);
 
+  const byDirection = {};
+  Object.keys(DIRECTION_LABELS).forEach((d) => {
+    byDirection[d] = match.tags.filter((t) => t.team === "us" && DIRECTION_RELEVANT_EVENTS.includes(t.eventKey) && t.direction === d).length;
+  });
+  const hasDirectionData = match.tags.some((t) => t.direction);
+  const directionTotal = Object.values(byDirection).reduce((a, b) => a + b, 0);
+
   let possUs = null;
   if (match.possession && match.possession.length > 0) {
     const dur = { us: 0, opp: 0, neutral: 0 };
@@ -2084,7 +2091,7 @@ function computeMatchReport(match) {
     possUs = total > 0 ? Math.round((dur.us / total) * 100) : null;
   }
 
-  return { goalsUs, goalsOpp, stats, byZone, hasZoneData, byCouloir, hasCouloirData, couloirTotal, possUs };
+  return { goalsUs, goalsOpp, stats, byZone, hasZoneData, byCouloir, hasCouloirData, couloirTotal, byDirection, hasDirectionData, directionTotal, possUs };
 }
 
 function generateSynthese(report) {
@@ -2237,6 +2244,23 @@ function MatchReportView({ match, report, signals }) {
                 <div className="compare-bar-track"><div className="compare-bar-fill" style={{ width: `${report.couloirTotal > 0 ? (report.byCouloir[key] / report.couloirTotal) * 100 : 0}%` }} /></div>
               </div>
               <span className="compare-bar-val opp">{report.byCouloir[key]} actions</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="panel-heading" style={{ marginTop: 18 }}>Passes par direction</div>
+      {!report.hasDirectionData && <div className="empty-state">Aucune direction taguée sur ce match — renseigne la direction dans le Journal de Studio pour débloquer cette section.</div>}
+      {report.hasDirectionData && (
+        <div className="compare-bars">
+          {Object.entries(DIRECTION_LABELS).map(([key, label]) => (
+            <div className="compare-bar-row" key={key}>
+              <span className="compare-bar-val us">{report.directionTotal > 0 ? Math.round((report.byDirection[key] / report.directionTotal) * 100) : 0}%</span>
+              <div className="compare-bar-mid">
+                <div className="compare-bar-label">{label}</div>
+                <div className="compare-bar-track"><div className="compare-bar-fill" style={{ width: `${report.directionTotal > 0 ? (report.byDirection[key] / report.directionTotal) * 100 : 0}%` }} /></div>
+              </div>
+              <span className="compare-bar-val opp">{report.byDirection[key]} passes</span>
             </div>
           ))}
         </div>
@@ -3533,6 +3557,28 @@ const ZONE_RELEVANT_EVENTS = [
   "dribble_ok", "dribble_ko", "tir_cadre", "tir_hc",
   "recup", "perte", "tacle_ok", "tacle_ko", "interception", "degagement", "duel_ok", "duel_ko",
 ];
+const DIRECTION_RELEVANT_EVENTS = ["passe_ok", "passe_ko"];
+const DIRECTION_LABELS = { avant: "Avant", laterale: "Latérale", arriere: "Arrière" };
+
+function DirectionPicker({ direction, onPick }) {
+  return (
+    <div className="direction-picker">
+      <div className="pitch-picker-label">Direction de la passe</div>
+      <div className="direction-options">
+        {Object.entries(DIRECTION_LABELS).map(([key, label]) => (
+          <button
+            key={key}
+            type="button"
+            className={`direction-option ${direction === key ? "selected" : ""}`}
+            onClick={() => onPick(key)}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 function PitchPicker({ zone, couloir, onPick }) {
   const zones = ["offensive", "mediane", "defensive"];
@@ -3783,6 +3829,7 @@ function TaggingScreen(props) {
           {pendingPlayerTag && (() => {
             const pendingTag = match.tags.find((t) => t.id === pendingPlayerTag.tagId);
             const showZonePicker = pendingTag && ZONE_RELEVANT_EVENTS.includes(pendingTag.eventKey);
+            const showDirectionPicker = pendingTag && DIRECTION_RELEVANT_EVENTS.includes(pendingTag.eventKey);
             return (
               <div className={`player-picker ${pendingPlayerTag.team}`}>
                 <div className="player-picker-label">
@@ -3793,6 +3840,12 @@ function TaggingScreen(props) {
                     zone={pendingTag.zone}
                     couloir={pendingTag.couloir}
                     onPick={(zone, couloir) => setTagZoneCouloir(pendingTag.id, zone, couloir)}
+                  />
+                )}
+                {showDirectionPicker && (
+                  <DirectionPicker
+                    direction={pendingTag.direction}
+                    onPick={(direction) => setTagField(pendingTag.id, "direction", direction)}
                   />
                 )}
                 <div className="player-picker-grid">
@@ -3889,6 +3942,14 @@ function TaggingScreen(props) {
                     <option value="axe">Axe</option>
                     <option value="droite">Droite</option>
                   </select>
+                  {DIRECTION_RELEVANT_EVENTS.includes(t.eventKey) && (
+                    <select className="journal-zone-select" value={t.direction || ""} onChange={(e) => setTagField(t.id, "direction", e.target.value)}>
+                      <option value="">Direction —</option>
+                      <option value="avant">Avant</option>
+                      <option value="laterale">Latérale</option>
+                      <option value="arriere">Arrière</option>
+                    </select>
+                  )}
                   <button className="icon-btn" onClick={() => removeTag(t.id)} aria-label="Supprimer cette action">
                     <X size={12} />
                   </button>
@@ -4466,6 +4527,11 @@ const CSS = `
   .pitch-cell { flex: 1; background: transparent; border: 1px dashed rgba(255,255,255,0.3); }
   .pitch-cell:hover { background: rgba(227,178,60,0.3); }
   .pitch-cell.selected { background: rgba(227,178,60,0.6); border-color: var(--gold); border-style: solid; }
+  .direction-picker { margin-bottom: 12px; }
+  .direction-options { display: flex; gap: 6px; }
+  .direction-option { flex: 1; background: var(--bg); border: 1px solid var(--line); color: var(--ink); border-radius: 6px; padding: 8px 4px; font-size: 11px; font-weight: 600; }
+  .direction-option:hover { border-color: var(--gold); }
+  .direction-option.selected { background: var(--gold); border-color: var(--gold); color: var(--gold-ink); font-weight: 700; }
   .player-picker-team { color: var(--gold); }
   .player-picker.opp .player-picker-team { color: var(--crimson); }
   .player-picker-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 5px; }
