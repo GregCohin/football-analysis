@@ -3434,7 +3434,7 @@ function RatingScreen({ match, setTeamRating, setPlayerRating, goHome, goTagging
   return (
     <div className="tagging">
       <div className="topbar">
-        <button className="icon-btn" onClick={goHome} aria-label="Retour"><ArrowLeft size={16} /></button>
+        <button className="btn btn-ghost btn-small" onClick={goHome}><ArrowLeft size={14} /> Accueil Studio</button>
         <div className="topbar-title">
           <div className="topbar-name">{match.name}</div>
           <div className="topbar-meta">vs {match.opponent}</div>
@@ -3732,7 +3732,7 @@ function TaggingScreen(props) {
   return (
     <div className="tagging">
       <div className="topbar">
-        <button className="icon-btn" onClick={goHome} aria-label="Retour"><ArrowLeft size={16} /></button>
+        <button className="btn btn-ghost btn-small" onClick={goHome}><ArrowLeft size={14} /> Accueil Studio</button>
         <div className="topbar-title">
           <div className="topbar-name">{match.name}</div>
           <div className="topbar-meta">vs {match.opponent}</div>
